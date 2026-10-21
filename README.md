@@ -54,5 +54,19 @@ slothshot index "$env:USERPROFILE\Pictures\Screenshots"
 slothshot index .\synthetic-screenshots --config .\config.toml
 ```
 
-This phase prepares FTS5 and the embeddings table in SQLite. Keyword and
-semantic search commands are introduced in later phases.
+The database includes an FTS5 index for OCR text and an embeddings table ready
+for later use. Semantic and hybrid search arrive in Phase 4.
+
+## Search indexed text
+
+Keyword search uses SQLite FTS5, ranks matches with BM25, and highlights the
+matching text in the snippet. Word prefixes work while you type. SlothShot
+first looks for all query terms; if none match together, it retries with any
+term so longer queries can still return candidates.
+
+```powershell
+slothshot search "docker port" --mode keyword
+slothshot search "address already in" --mode keyword --limit 5
+```
+
+Search mode is keyword-only until semantic and hybrid search arrive in Phase 4.

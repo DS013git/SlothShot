@@ -17,6 +17,7 @@ from slothshot.config import AppConfig, load_config
 from slothshot.db import connect_database
 from slothshot.indexer import scan_folder
 from slothshot.ocr import OCR_MODEL_FILES, OCRReader
+from slothshot.search import search_keyword
 
 app = typer.Typer(help="A local, offline librarian for your screenshots.")
 logger = logging.getLogger("slothshot")
@@ -189,6 +190,42 @@ def index(
     )
     if summary.failed:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Words to find in indexed screenshots."),
+    mode: str = typer.Option("keyword", "--mode", help="Search mode (keyword in this phase)."),
+    limit: int = typer.Option(20, min=1, max=100, help="Maximum number of results."),
+    config_file: Path | None = typer.Option(
+        None, "--config", help="Path to config.toml; defaults to the user config path."
+    ),
+) -> None:
+    """Find screenshot text by exact words and word prefixes."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    if mode != "keyword":
+        typer.echo("This phase supports only --mode keyword.", err=True)
+        raise typer.Exit(code=2)
+    try:
+        config = load_config(config_file)
+        connection = connect_database(config.database_path)
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        typer.echo(f"Could not open the local database: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        results = search_keyword(connection, query, limit=limit)
+    except (ValueError, sqlite3.Error) as exc:
+        typer.echo(f"Search failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        connection.close()
+
+    if not results:
+        typer.echo("No matching screenshots found.")
+        return
+    for result in results:
+        typer.echo(f"{result.path}\n  score: {result.score:.4f}\n  {result.snippet}")
 
 
 if __name__ == "__main__":

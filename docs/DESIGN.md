@@ -81,3 +81,15 @@ lose work on the image currently being read, while earlier images stay saved.
 Folder cleanup runs only after the scan has completed, and only removes records
 under the scanned root. Invalid images are recorded with an error status so a
 bad screenshot does not abort the rest of the folder.
+
+## Phase 3: keyword search
+
+Keyword search sends only sanitized word tokens to FTS5. Tokens are quoted and
+given a prefix wildcard, so punctuation and words such as `OR` cannot become
+FTS query syntax, while partially typed words still match. BM25 ranks the
+results; snippets mark the matched OCR text for the CLI and later UI.
+
+Short queries first require all terms, which favors precision. If no image
+contains every term, the search retries with OR so a longer natural-language
+query can still return candidates. This avoids treating sentence-like search
+input as a strict intersection that silently produces no results.
