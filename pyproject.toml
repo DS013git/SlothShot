@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slothshot"
+version = "0.1.0"
+description = "A local, offline librarian for your screenshots"
+readme = "README.md"
+requires-python = ">=3.10,<3.12"
+license = "MIT"
+authors = [{ name = "SlothShot contributors" }]
+dependencies = [
+    "fastembed==0.9.0",
+    "numpy==2.2.6",
+    "onnxruntime==1.23.2",
+    "Pillow==13.0.0",
+    "psutil==7.2.2",
+    "rapidocr==3.10.0",
+    "streamlit==1.65.0",
+    "typer==0.27.3",
+    "watchdog==6.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.4.2",
+    "ruff==0.14.2",
+]
+
+[project.scripts]
+slothshot = "slothshot.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

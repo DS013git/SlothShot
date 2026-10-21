@@ -1,0 +1,14 @@
+# Copy this file to %APPDATA%\SlothShot\config.toml to customize defaults.
+# Windows environment variables such as %USERPROFILE% are expanded.
+
+[paths]
+watch_folder = '%USERPROFILE%\Pictures\Screenshots'
+data_dir = '%LOCALAPPDATA%\SlothShot'
+model_cache = '%LOCALAPPDATA%\SlothShot\models'
+
+[models]
+embedding = 'BAAI/bge-small-en-v1.5'
+
+[ocr]
+max_image_side = 1600
+preprocess = true

@@ -1,0 +1,27 @@
+# Python environments and build output
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.pytest-tmp/
+.ruff_cache/
+.coverage
+
+# Local application data and private screenshots
+*.db
+*.db-shm
+*.db-wal
+data/
+screenshots/
+private_eval*.yml
+private_eval*.yaml
+
+# Editor and operating-system files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
