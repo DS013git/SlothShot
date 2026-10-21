@@ -5,7 +5,9 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import logging
+import os
 import sqlite3
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -260,6 +262,44 @@ def watch(
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         typer.echo(f"Could not start screenshot watcher: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+
+@app.command()
+def ui(
+    config_file: Path | None = typer.Option(
+        None, "--config", help="Path to config.toml; defaults to the user config path."
+    ),
+) -> None:
+    """Start the local Streamlit interface on this computer only."""
+    try:
+        load_config(config_file)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Could not load SlothShot config: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    script_path = Path(__file__).with_name("ui.py").resolve()
+    command = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(script_path),
+        "--server.address=127.0.0.1",
+    ]
+    environment = os.environ.copy()
+    environment["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+    if config_file is not None:
+        environment["SLOTHSHOT_CONFIG_PATH"] = str(config_file.expanduser().resolve())
+    else:
+        environment.pop("SLOTHSHOT_CONFIG_PATH", None)
+
+    try:
+        return_code = subprocess.call(command, env=environment)
+    except OSError as exc:
+        typer.echo(f"Could not start the Streamlit interface: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if return_code:
+        raise typer.Exit(code=return_code)
 
 
 if __name__ == "__main__":

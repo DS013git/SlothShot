@@ -131,3 +131,27 @@ SQLite commits each indexed image independently, so a shutdown or process crash
 can be recovered by the next catch-up scan. Ctrl+C stops event observation,
 drains queued tasks, and closes the worker's database connection. Any image that
 has not settled before shutdown is picked up by the next catch-up scan.
+
+## Phase 6: local Streamlit UI
+
+The UI opens the existing SQLite file with `mode=ro` and enables SQLite's
+`query_only` setting. Its search operations use short-lived read-only
+connections, so searches work whether or not the background watcher is
+running. The **Index now** button starts the existing CLI index command as a
+separate child process and records its output in the local app-data folder;
+it does not turn the UI's connection into a writer or hold the page while OCR
+and embedding run.
+
+Search results use three columns of cards with thumbnails, snippets, scores,
+and local open-image and open-folder actions. Snippet text is HTML-escaped
+before FTS highlight markers become `<mark>` elements. Streamlit's copyable
+code block provides a browser-side copy button without sending paths to a
+clipboard service. Thumbnails are reduced to a bounded size and cached in
+memory; the source images are never copied or modified.
+
+The sidebar reads totals and the last successful index time from SQLite. Its
+pending count is a cached estimate of supported image paths not yet recorded
+in the index; after an Index now run, use **Refresh stats** to clear the short
+cache. The UI logs whether the configured embedding model is already present
+in the local cache, and binds its server to `127.0.0.1` with usage statistics
+disabled.

@@ -85,3 +85,15 @@ indexing thread. Stop it with Ctrl+C.
 slothshot watch
 slothshot watch "C:\path\to\screenshots" --config .\config.toml
 ```
+
+## Browse with the local UI
+
+The Streamlit page binds to this computer only. It opens SQLite read-only,
+caches small thumbnails in memory, and can launch a separate background index
+command from **Index now**. Use the code block's copy button to copy a result's
+path. Stop the UI with Ctrl+C.
+
+```powershell
+slothshot ui
+slothshot ui --config .\config.toml
+```
