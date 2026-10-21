@@ -1,7 +1,7 @@
 # SlothShot
 
-A local, offline librarian for screenshots. Phase 0 sets up the project and
-configuration; indexing and search arrive in later phases.
+A local, offline librarian for screenshots. The current phase reads text from
+one image with CPU ONNX OCR; indexing and search arrive in later phases.
 
 ## Phase 0 setup
 
@@ -19,7 +19,25 @@ its database and model cache under `%LOCALAPPDATA%\SlothShot`. Copy
 `config.example.toml` to `%APPDATA%\SlothShot\config.toml` to customize paths.
 Run `slothshot doctor --config path\to\config.toml` to check a specific config.
 
-The first phase does not download models. Doctor reports whether model cache
-files are present and checks the Python environment and SQLite FTS5 support.
+Doctor reports whether the configured model cache contains files and checks the
+Python environment and SQLite FTS5 support. Phase 1 bundles its OCR model files
+with the RapidOCR package, so there is no separate model download during OCR.
 Model licensing and dependency license details will be documented before
 release.
+
+## Read one screenshot
+
+RapidOCR's small ONNX models are bundled with the installed package. The OCR
+command checks that those local files exist before starting the engine, so it
+does not silently fetch them during an OCR run.
+
+```powershell
+slothshot ocr "C:\path\to\screenshot.png"
+slothshot ocr "C:\path\to\screenshot.png" --no-preprocess
+```
+
+Each output line includes RapidOCR's confidence score. Preprocessing bounds
+large images, enlarges small screenshots, and converts them to grayscale.
+Dark-mode inversion is opt-in with `ocr.invert_dark_mode = true`. On one
+synthetic dark-terminal image it improved the model confidence score, but that
+single example is not enough to turn it on automatically for all screenshots.

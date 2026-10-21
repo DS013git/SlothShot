@@ -23,7 +23,7 @@ def test_loads_overrides_and_relative_paths(tmp_path: Path) -> None:
     file.write_text(
         '[paths]\nwatch_folder="screens"\ndata_dir="data"\n'
         '[models]\nembedding="custom/model"\n'
-        '[ocr]\nmax_image_side=2048\npreprocess=false\n',
+        "[ocr]\nmax_image_side=2048\npreprocess=false\n",
         encoding="utf-8",
     )
 

@@ -12,3 +12,5 @@ embedding = 'BAAI/bge-small-en-v1.5'
 [ocr]
 max_image_side = 1600
 preprocess = true
+# Optional experiment: invert dark screenshots before OCR. Disabled by default.
+invert_dark_mode = false

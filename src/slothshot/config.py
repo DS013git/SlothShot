@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+import tomllib
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class AppConfig:
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     max_image_side: int = 1600
     preprocess: bool = True
+    invert_dark_mode: bool = False
 
     @property
     def database_path(self) -> Path:
@@ -99,10 +101,13 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     embedding_model = models.get("embedding", defaults.embedding_model)
     preprocess = ocr.get("preprocess", defaults.preprocess)
+    invert_dark_mode = ocr.get("invert_dark_mode", defaults.invert_dark_mode)
     if not isinstance(embedding_model, str) or not embedding_model.strip():
         raise ValueError("models.embedding must be a non-empty string")
     if not isinstance(preprocess, bool):
         raise ValueError("ocr.preprocess must be true or false")
+    if not isinstance(invert_dark_mode, bool):
+        raise ValueError("ocr.invert_dark_mode must be true or false")
 
     def path_value(key: str, fallback: Path) -> Path:
         value = paths.get(key)
@@ -120,4 +125,5 @@ def load_config(path: Path | None = None) -> AppConfig:
         embedding_model=embedding_model.strip(),
         max_image_side=max_image_side,
         preprocess=preprocess,
+        invert_dark_mode=invert_dark_mode,
     )

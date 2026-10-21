@@ -32,3 +32,30 @@ will own both metadata and FTS5 text search, while embeddings will be kept as
 float32 blobs in that database. Semantic and keyword result lists will be
 combined with reciprocal rank fusion. The UI will read this local database and
 will not need the watcher to be active.
+
+## Phase 1: OCR
+
+RapidOCR is loaded only when the first readable image is sent to the engine.
+The reader reuses that engine for later images, catches file/model errors as
+results, and logs elapsed time on successful and failed calls. Large images are
+bounded before inference; optional preprocessing enlarges small screenshots,
+uses grayscale, and increases contrast. Per-line confidence is retained for
+later inspection instead of being collapsed into one score.
+
+RapidOCR 3.10.0 bundles its small ONNX weights in the installed package. Before
+initializing it, SlothShot checks for the three expected model files and logs
+their local path. If a file is missing, the reader reports how to restore the
+package instead of allowing the OCR library to download a replacement. The
+installed RapidOCR default selects ONNX Runtime and has CUDA disabled; SlothShot
+installs the CPU `onnxruntime` package.
+
+Dark-mode inversion is an optional configuration setting. We compared it on a
+generated terminal screenshot containing “ADDRESS ALREADY IN USE”; both the
+normal and inverted image were recognized. Confidence was 0.97017 normally and
+0.99098 after inversion. This one sample suggests inversion can help, but is
+not broad enough evidence to enable it for every dark screenshot, so it remains
+off by default pending a more varied evaluation.
+
+The dependency resolver caught a Phase 0 pin mismatch before installation:
+FastEmbed 0.9 excludes Pillow 13 on Python 3.11. Pillow is pinned to 12.3.0,
+which satisfies both OCR and embedding dependencies in the resolved install.
