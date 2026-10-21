@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import sqlite3
 import threading
@@ -36,6 +37,13 @@ from slothshot.indexer import (
 from slothshot.ocr import OCRReader
 
 logger = logging.getLogger("slothshot.watcher")
+
+
+def _event_path(value: bytes | str) -> Path:
+    """Convert a watchdog event path, which may be ``bytes``, to a ``Path``."""
+    return Path(os.fsdecode(value))
+
+
 IGNORED_SUFFIXES = {".crdownload", ".part", ".partial", ".temp", ".tmp"}
 STABLE_SECONDS = 0.75
 STABILITY_TIMEOUT_SECONDS = 30.0
@@ -132,7 +140,7 @@ class DebouncedEventHandler(FileSystemEventHandler):
         self._lock = threading.Lock()
 
     def on_created(self, event: DirCreatedEvent | FileCreatedEvent) -> None:
-        path = Path(event.src_path)
+        path = _event_path(event.src_path)
         if event.is_directory:
             self._enqueue("scan_tree", path)
         elif is_supported_image(path):
@@ -140,17 +148,17 @@ class DebouncedEventHandler(FileSystemEventHandler):
 
     def on_modified(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
-            path = Path(event.src_path)
+            path = _event_path(event.src_path)
             if is_supported_image(path):
                 self._enqueue("upsert", path)
 
     def on_deleted(self, event: DirDeletedEvent | FileDeletedEvent) -> None:
         action = "delete_tree" if event.is_directory else "delete"
-        self._enqueue(action, Path(event.src_path), allow_outside=True)
+        self._enqueue(action, _event_path(event.src_path), allow_outside=True)
 
     def on_moved(self, event: DirMovedEvent | FileMovedEvent) -> None:
-        source = Path(event.src_path)
-        destination = Path(event.dest_path)
+        source = _event_path(event.src_path)
+        destination = _event_path(event.dest_path)
         if event.is_directory:
             if self._is_inside_root(destination):
                 self._enqueue("move_tree", source, destination, allow_outside=True)

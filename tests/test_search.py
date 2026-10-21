@@ -25,7 +25,12 @@ def _add_image(connection: sqlite3.Connection, path: str, text: str) -> int:
 
 def test_sanitizer_discards_fts_syntax_and_keeps_unicode_words() -> None:
     assert sanitize_query('"OR" (docker-port) AND 银行 123 !') == (
-        "OR", "docker", "port", "AND", "银行", "123"
+        "OR",
+        "docker",
+        "port",
+        "AND",
+        "银行",
+        "123",
     )
     assert sanitize_query("--- ... !!!") == ()
 

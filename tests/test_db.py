@@ -29,12 +29,23 @@ def test_database_uses_wal_and_creates_versioned_schema(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(images)")}
         assert {
-            "id", "path", "sha256", "width", "height", "ocr_text",
-            "avg_confidence", "file_mtime", "indexed_at", "status",
+            "id",
+            "path",
+            "sha256",
+            "width",
+            "height",
+            "ocr_text",
+            "avg_confidence",
+            "file_mtime",
+            "indexed_at",
+            "status",
         } <= columns
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE name = 'embeddings'"
-        ).fetchone() is not None
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'embeddings'"
+            ).fetchone()
+            is not None
+        )
     finally:
         connection.close()
 
@@ -43,29 +54,44 @@ def test_fts_triggers_keep_text_and_path_synchronized(tmp_path: Path) -> None:
     connection = connect_database(tmp_path / "screenshots.sqlite3")
     try:
         image_id = _insert_image(connection)
-        assert connection.execute(
-            "SELECT rowid FROM images_fts WHERE images_fts MATCH 'address'"
-        ).fetchone()[0] == image_id
+        assert (
+            connection.execute(
+                "SELECT rowid FROM images_fts WHERE images_fts MATCH 'address'"
+            ).fetchone()[0]
+            == image_id
+        )
 
         connection.execute(
             "UPDATE images SET ocr_text = 'docker port error', "
             "path = 'C:/shots/two.png' WHERE id = ?",
             (image_id,),
         )
-        assert connection.execute(
-            "SELECT rowid FROM images_fts WHERE images_fts MATCH 'docker'"
-        ).fetchone()[0] == image_id
-        assert connection.execute(
-            "SELECT rowid FROM images_fts WHERE images_fts MATCH 'two'"
-        ).fetchone()[0] == image_id
-        assert connection.execute(
-            "SELECT rowid FROM images_fts WHERE images_fts MATCH 'address'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT rowid FROM images_fts WHERE images_fts MATCH 'docker'"
+            ).fetchone()[0]
+            == image_id
+        )
+        assert (
+            connection.execute(
+                "SELECT rowid FROM images_fts WHERE images_fts MATCH 'two'"
+            ).fetchone()[0]
+            == image_id
+        )
+        assert (
+            connection.execute(
+                "SELECT rowid FROM images_fts WHERE images_fts MATCH 'address'"
+            ).fetchone()
+            is None
+        )
 
         connection.execute("DELETE FROM images WHERE id = ?", (image_id,))
-        assert connection.execute(
-            "SELECT rowid FROM images_fts WHERE images_fts MATCH 'docker'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT rowid FROM images_fts WHERE images_fts MATCH 'docker'"
+            ).fetchone()
+            is None
+        )
     finally:
         connection.close()
 

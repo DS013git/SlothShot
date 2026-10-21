@@ -263,9 +263,9 @@ def _configure_file_logging(log_file: Path) -> None:
     # Third-party libraries (RapidOCR) attach their own console handlers and
     # print to stderr; give them a harmless sink when there is no console.
     if sys.stdout is None:
-        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+        sys.stdout = Path(os.devnull).open("w", encoding="utf-8")  # noqa: SIM115
     if sys.stderr is None:
-        sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+        sys.stderr = Path(os.devnull).open("w", encoding="utf-8")  # noqa: SIM115
 
 
 @app.command()

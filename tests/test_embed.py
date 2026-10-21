@@ -40,9 +40,7 @@ class FakeEngine:
         return [np.array([1, 0], dtype=np.float32)]
 
 
-def _add_image(
-    connection: sqlite3.Connection, path: str, ocr_text: str = "sample OCR"
-) -> int:
+def _add_image(connection: sqlite3.Connection, path: str, ocr_text: str = "sample OCR") -> int:
     cursor = connection.execute(
         """INSERT INTO images (
                path, sha256, width, height, ocr_text, avg_confidence,
@@ -73,9 +71,7 @@ def test_oversized_single_word_is_safely_sliced() -> None:
 
 def test_embedding_wrapper_is_lazy_and_stores_float32_chunks(tmp_path: Path) -> None:
     engine = FakeEngine()
-    model = EmbeddingModel(
-        default_config(), engine_factory=lambda: engine
-    )
+    model = EmbeddingModel(default_config(), engine_factory=lambda: engine)
     connection = connect_database(tmp_path / "embeddings.sqlite3")
     try:
         image_id = _add_image(connection, "C:/shots/one.png")

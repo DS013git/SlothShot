@@ -79,9 +79,10 @@ class EmbeddingModel:
         if not texts:
             return []
         started = time.perf_counter()
-        vectors = [np.asarray(item, dtype=np.float32) for item in self.engine.embed(
-            texts, batch_size=16, parallel=1
-        )]
+        vectors = [
+            np.asarray(item, dtype=np.float32)
+            for item in self.engine.embed(texts, batch_size=16, parallel=1)
+        ]
         if len(vectors) != len(texts):
             raise RuntimeError(
                 f"FastEmbed returned {len(vectors)} vectors for {len(texts)} text chunks"

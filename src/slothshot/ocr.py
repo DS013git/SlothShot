@@ -179,8 +179,3 @@ class OCRReader:
         elapsed = time.perf_counter() - started
         logger.warning("%s: %s (%.3f seconds)", image_path, message, elapsed)
         return OCRResult(text="", lines=(), elapsed_seconds=elapsed, error=message)
-
-
-def ocr_image(image_path: Path, config: AppConfig | None = None) -> OCRResult:
-    """Convenience function for reading a single screenshot from the CLI."""
-    return OCRReader(config).read(image_path)

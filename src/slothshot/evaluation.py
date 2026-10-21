@@ -46,7 +46,7 @@ def retrieval_metrics(
     """Compute top-k hit rates and reciprocal rank averaged across queries."""
     if len(rankings) != len(expected_sets) or not rankings:
         raise ValueError("Rankings and expected sets must have the same non-zero length")
-    hits = {cutoff: 0 for cutoff in (1, 3, 5)}
+    hits = dict.fromkeys((1, 3, 5), 0)
     reciprocal_ranks: list[float] = []
     for ranking, expected in zip(rankings, expected_sets, strict=True):
         normalized = [Path(path).name.casefold() for path in ranking]

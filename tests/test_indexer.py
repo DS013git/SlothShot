@@ -57,9 +57,12 @@ def test_scan_indexes_once_then_skips_unchanged_bytes(tmp_path: Path) -> None:
         assert second.skipped == 1
         assert len(reader.calls) == 1
         assert connection.execute("SELECT count(*) FROM images").fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT rowid FROM images_fts WHERE images_fts MATCH 'words'"
-        ).fetchone() is not None
+        assert (
+            connection.execute(
+                "SELECT rowid FROM images_fts WHERE images_fts MATCH 'words'"
+            ).fetchone()
+            is not None
+        )
     finally:
         connection.close()
 

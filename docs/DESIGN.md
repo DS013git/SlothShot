@@ -215,3 +215,32 @@ is one code path to test. Three choices are worth knowing:
 The virtual environment's `pythonw.exe` is a small launcher that starts the real
 interpreter, so one watcher shows up as two processes. `-Uninstall` and
 `-Status` find them by command line and handle both.
+
+## Phase 9: polish, verification, and release checks
+
+The last phase added no features. It made the claims in the README checkable.
+
+- **Offline claim.** "Works with Wi-Fi off" was tested by running the whole
+  pipeline (OCR, embeddings, indexing, all three search modes) in a process
+  where every socket connection and DNS lookup raised an error. It made zero
+  connection attempts. This proves the code does not need a network. It is not
+  the same as switching a real adapter off, so `docs/DEMO.md` does that on
+  camera.
+- **Licenses.** Package licenses come from installed metadata, model licenses
+  from the model providers. The Qdrant ONNX build that `fastembed` downloads is
+  listed separately from the `BAAI` original, because it is the file that is
+  actually used. A scan of all installed packages found no GPL-family license.
+  It is a scan, not a legal review, and the README says so.
+- **Static checks.** `mypy src` found real issues: watchdog may report event
+  paths as `bytes`, which `Path()` rejects. A small `_event_path` helper decodes
+  them. A vulture scan found one unused function (`ocr_image`), which was
+  removed. The other reported names are framework callbacks.
+- **Fresh clone.** `pip install -e .`, `doctor`, `index`, `search`, `watch` and
+  `ui` were run from a clean clone in a new virtual environment.
+
+### What is deliberately not done
+
+There is no vector index. At the tested scale (up to 5,000 records, about
+140 ms) a NumPy scan is simple and fast enough, and a vector database would add
+a dependency and a failure mode for no visible benefit. The README states the
+scale limit instead of hiding it.

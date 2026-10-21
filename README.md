@@ -1,133 +1,252 @@
-# SlothShot
+# SlothShot 🦥
 
-A local, offline librarian for screenshots. SlothShot reads text from images
-with CPU ONNX OCR, indexes it in SQLite, and finds screenshots by keywords or
-meaning with local ONNX embeddings.
+**A lazy librarian for your screenshots. It reads them, remembers them, and finds them by the words you remember or by what they were about. All on your own computer, with the Wi-Fi off.**
 
-## Phase 0 setup
+<!-- TODO: replace with a real recording. Script: docs/DEMO.md -->
+> 📽️ *Demo GIF placeholder. See [`docs/DEMO.md`](docs/DEMO.md) for the 2-minute script to record it.*
 
-Requires Python 3.10 or 3.11 on Windows 10/11.
+You take a screenshot of an error, a chat, a recipe, a bank page. Three weeks later you remember *"that Docker port thing"*, not the file name. SlothShot watches your screenshots folder, reads the text in every image with OCR, and lets you search by **exact words** and by **meaning**. Searching `docker port problem` finds the screenshot that says `address already in use`.
+
+It never renames, sorts, moves or uploads anything. Your files stay exactly where they are.
+
+Built for the DEV **Hacktoberfest 2026 Open-Source AI Challenge**, weekly theme *"Slow and Steady"*: the more lazy you are, the more it helps.
+
+## Why open source matters here
+
+Screenshots are some of the most private files you own: chats, one-time passwords, bank pages, medical results. That rules out the usual "send it to a cloud OCR API" approach. The open-source pieces are what make this project possible at all:
+
+| Property | How open-source models make it work |
+| --- | --- |
+| **Offline** | OCR and embedding models are plain ONNX files that run on the CPU with `onnxruntime`. After a one-time model download, nothing needs a network. |
+| **Private** | No server ever sees an image or its text. There is no account, no API key and no telemetry. |
+| **Free** | No per-image fees, no subscription, no rate limits. The cost is some CPU time. |
+| **Swappable** | The embedding model is one line in `config.toml`. Want a multilingual model? Change the name. You can read, audit and replace every component. |
+| **Small enough** | No PyTorch and no GPU. It is designed for an 8 GB RAM, no-GPU Intel i3 laptop. |
+
+## How it works
+
+```mermaid
+flowchart TD
+    A[Screenshots folder] -->|new file| B[Watcher: waits until file is stable]
+    B --> C[Indexer: skips files with a known SHA-256]
+    C --> D[OCR: RapidOCR on ONNX, CPU]
+    D --> E[Embeddings: fastembed bge-small, ONNX, CPU]
+    D --> F[(SQLite + FTS5: text and metadata)]
+    E --> G[(SQLite: float32 vectors)]
+    F --> H[Keyword search: BM25]
+    G --> I[Semantic search: cosine similarity in NumPy]
+    H --> J[Hybrid search: Reciprocal Rank Fusion]
+    I --> J
+    J --> K[CLI: slothshot search]
+    J --> L[Local UI: slothshot ui]
+```
+
+One SQLite file holds everything. The UI only reads that file, so search works whether or not the watcher is running. See [`docs/DESIGN.md`](docs/DESIGN.md) for the reasoning behind each choice.
+
+## Quick start
+
+Requires **Windows 10/11** and **Python 3.10 or 3.11**.
 
 ```powershell
+git clone <your-fork-url> slothshot
+cd slothshot
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
+```
+
+**1. Check your setup.**
+
+```powershell
 slothshot doctor
 ```
 
-By default, SlothShot looks in `%USERPROFILE%\Pictures\Screenshots` and stores
-its database and model cache under `%LOCALAPPDATA%\SlothShot`. Copy
-`config.example.toml` to `%APPDATA%\SlothShot\config.toml` to customize paths.
-Run `slothshot doctor --config path\to\config.toml` to check a specific config.
+It checks Python, dependencies, SQLite FTS5, the OCR model files, the embedding-model cache and your watch folder.
 
-Doctor checks the configured embedding model's local cache, the Python
-environment, and SQLite FTS5 support. Phase 1 bundles its OCR model files with
-RapidOCR, so OCR needs no separate model download.
-
-## Read one screenshot
-
-RapidOCR's small ONNX models are bundled with the installed package. The OCR
-command checks that those local files exist before starting the engine, so it
-does not silently fetch them during an OCR run.
-
-```powershell
-slothshot ocr "C:\path\to\screenshot.png"
-slothshot ocr "C:\path\to\screenshot.png" --no-preprocess
-```
-
-Each output line includes RapidOCR's confidence score. Preprocessing bounds
-large images, enlarges small screenshots, and converts them to grayscale.
-Dark-mode inversion is opt-in with `ocr.invert_dark_mode = true`. On one
-synthetic dark-terminal image it improved the model confidence score, but that
-single example is not enough to turn it on automatically for all screenshots.
-
-## Index a folder
-
-The index command scans recursively, recognizes supported image formats, and
-stores metadata, OCR text, and local text embeddings in SQLite. It skips
-unchanged files by SHA-256 and reuses OCR and vectors when a file is renamed or
-copied.
+**2. First run, while online.** The embedding model (about 65 MB in the cache) downloads once the first time you index or search. After that it loads from disk with network access disabled. The OCR models ship inside the `rapidocr` package, so they need no separate download.
 
 ```powershell
 slothshot index "$env:USERPROFILE\Pictures\Screenshots"
-slothshot index .\synthetic-screenshots --config .\config.toml
 ```
 
-The first indexing or semantic-search run downloads the configured embedding
-model if needed. Later uses load it from the cache, with network access disabled.
-
-## Search indexed text
-
-Keyword search uses SQLite FTS5, ranks matches with BM25, and highlights the
-matching text in the snippet. Word prefixes work while you type. SlothShot
-first looks for all query terms; if none match together, it retries with any
-term so longer queries can still return candidates.
+**3. Search.**
 
 ```powershell
-slothshot search "docker port" --mode keyword
-slothshot search "address already in" --mode keyword --limit 5
-slothshot search "docker port problem" --mode semantic
-slothshot search "docker port problem" --mode hybrid
+slothshot search "docker port problem"
+slothshot search "address already in use" --mode keyword
+slothshot ui          # browser UI on http://127.0.0.1:8501
 ```
 
-Use `--mode semantic` for meaning-based retrieval or `--mode hybrid` (the
-default) to combine both ranked lists. Set `models.embedding` in TOML to choose
-a different FastEmbed-supported model.
-
-## Watch for new screenshots
-
-The watcher scans the folder once on startup, then watches it recursively. It
-waits for each image's size and modification time to settle before OCR, ignores
-common temporary and partial file names, and sends work to one background
-indexing thread. Stop it with Ctrl+C.
+**4. Make it lazy.** Start the watcher at every login so new screenshots are indexed on their own:
 
 ```powershell
-slothshot watch
-slothshot watch "C:\path\to\screenshots" --config .\config.toml
+.\scripts\install_autostart.ps1 -StartNow
 ```
 
-Add `--log-file path\to\watch.log` to write logs to a rotating file (1 MiB,
-three old copies) instead of the console. Autostart uses this.
+## CLI reference
 
-## Start automatically at login ("fully lazy" mode)
+| Command | What it does |
+| --- | --- |
+| `slothshot doctor` | Health check: Python, packages, FTS5, models, watch folder. |
+| `slothshot ocr <image> [--no-preprocess]` | Print the text and per-line confidence for one image, with timing. |
+| `slothshot index <folder>` | OCR and index new or changed images. Skips files already known by SHA-256, handles renames without redoing OCR, removes entries for deleted files. Safe to re-run or interrupt. |
+| `slothshot search "<query>" [--mode keyword\|semantic\|hybrid] [--limit N]` | Search. Default mode is `hybrid`. Prints path, score and a snippet. |
+| `slothshot watch [folder] [--log-file PATH]` | Catch up on anything missed, then watch for new files until Ctrl+C. |
+| `slothshot ui` | Start the Streamlit interface, bound to `127.0.0.1` only. |
 
-`scripts\install_autostart.ps1` makes the watcher start quietly every time you
-log in. It needs no administrator rights and does not change your screenshots
-folder. Run it from the repository root in PowerShell, after the Phase 0 setup:
+Every command accepts `--config path\to\config.toml`.
+
+**Search modes**
+
+- `keyword`: SQLite FTS5 with BM25 ranking and prefix matching. Special characters in your query cannot crash it.
+- `semantic`: cosine similarity between your query and stored text embeddings. Finds meaning, not just words.
+- `hybrid` (default): merges both rankings with Reciprocal Rank Fusion.
+
+**Autostart script** (`scripts\install_autostart.ps1`): `-StartNow`, `-Status`, `-Uninstall`, `-Method Startup`, `-ConfigFile`, `-PythonW`, `-LogFile`. Details are in the next section.
+
+### Start automatically at login
+
+The script registers a per-user Task Scheduler task that runs at login through `pythonw.exe`, so no console window appears. It needs no administrator rights. Logs go to `%LOCALAPPDATA%\SlothShot\logs\watch.log`. If Task Scheduler is unavailable it falls back to a Startup-folder shortcut. Running the installer twice is safe.
+
+If PowerShell blocks the script:
 
 ```powershell
-.\scripts\install_autostart.ps1 -StartNow   # install, and start it right now
-.\scripts\install_autostart.ps1 -Status     # installed? running? last log lines
-.\scripts\install_autostart.ps1 -Uninstall  # remove it and stop the watcher
+powershell -ExecutionPolicy Bypass -File .\scripts\install_autostart.ps1 -StartNow
 ```
 
-If PowerShell blocks the script, run it once with
-`powershell -ExecutionPolicy Bypass -File .\scripts\install_autostart.ps1`.
+If you move or delete the repository or its `.venv`, run `-Uninstall` first.
 
-- It registers a per-user **Task Scheduler** task (`SlothShotWatch`) that runs at
-  your login. The task launches `pythonw.exe`, the Python launcher without a
-  console window, so nothing appears on screen.
-- Logs go to `%LOCALAPPDATA%\SlothShot\logs\watch.log` (change with `-LogFile`).
-- The task keeps running on battery, has no time limit, runs only one copy, and
-  is configured to retry three times, a minute apart, if it fails (for example,
-  if the screenshots folder does not exist yet). That retry setting is not yet
-  tested.
-- If Task Scheduler is unavailable, the script falls back to a shortcut in your
-  Startup folder. Choose it directly with `-Method Startup`.
-- Pass `-ConfigFile path\to\config.toml` to use a custom config, and
-  `-PythonW` to use a different Python.
-- Running the installer again is safe: it replaces the old registration.
-- If you move or delete the repository or its `.venv`, run `-Uninstall` first, or
-  the task will keep trying to start a missing program.
+## Configuration
 
-## Browse with the local UI
+Copy [`config.example.toml`](config.example.toml) to `%APPDATA%\SlothShot\config.toml`.
 
-The Streamlit page binds to this computer only. It opens SQLite read-only,
-caches small thumbnails in memory, and can launch a separate background index
-command from **Index now**. Use the code block's copy button to copy a result's
-path. Stop the UI with Ctrl+C.
+```toml
+[paths]
+watch_folder = '%USERPROFILE%\Pictures\Screenshots'
+data_dir     = '%LOCALAPPDATA%\SlothShot'          # database lives here
+model_cache  = '%LOCALAPPDATA%\SlothShot\models'
+
+[models]
+embedding = 'BAAI/bge-small-en-v1.5'               # any fastembed-supported model
+
+[ocr]
+max_image_side = 1600       # larger images are downscaled before OCR
+preprocess = true           # grayscale, contrast, upscale small images
+invert_dark_mode = false    # experimental, off by default
+```
+
+Windows environment variables are expanded, and relative paths resolve next to the config file. If you change `models.embedding`, re-index so stored vectors match the new model.
+
+## Privacy
+
+- **No cloud, no telemetry, no accounts.** The only network use is the one-time download of the embedding model on first run. A startup log line confirms whether the model is already cached locally.
+- **The UI binds to `127.0.0.1`.** Streamlit usage statistics are disabled.
+- **Your screenshots are read, never modified.** SlothShot does not rename, move, copy or upload them.
+- **The database is not encrypted.** It stores the OCR text of every screenshot in plain text in `%LOCALAPPDATA%\SlothShot\slothshot.sqlite3`. That includes anything visible in an image, such as one-time passwords, account numbers or private messages. Anyone who can read your user profile can read that file. Treat it like the screenshots themselves, and rely on Windows disk encryption (BitLocker) if you need protection at rest.
+- **This repository contains no real screenshots.** All test and benchmark images are synthetic, generated by `scripts/make_sample_data.py`. Real-data folders and private evaluation files are in `.gitignore`.
+
+"Works with Wi-Fi off" was verified by running the full pipeline (OCR, embeddings, indexing, all three search modes) in a process where every network connection raised an error; it made zero connection attempts. The recorded demo ([`docs/DEMO.md`](docs/DEMO.md)) turns the real Wi-Fi off as well.
+
+## Performance
+
+Measured on **Intel Core i3-1215U, 7.65 GiB RAM, Windows, Python 3.11, CPU only**, using 105 synthetic screenshots (1000 x 620 px). Full method and failure analysis: [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
+| Measurement | Result |
+| --- | ---: |
+| OCR time per screenshot, median / p95 | 3.0 s / 3.3 s |
+| New screenshot to searchable (watcher, warm; one measurement) | about 6 s |
+| Peak process RAM while indexing | 586 MiB |
+| Database size for 105 images | 0.34 MiB |
+| Keyword search at 5,000 records | about 2 ms |
+| Semantic search at 5,000 records | about 142 ms |
+| Hybrid search at 5,000 records | about 109 ms |
+
+Search at 1,000 and 5,000 records was measured on scaled copies of the real index (text and vectors reused), not on 5,000 separately processed images.
+
+Retrieval on the synthetic set (12 queries):
+
+| Mode | Top-1 | Top-3 | MRR |
+| --- | ---: | ---: | ---: |
+| Keyword | 0.833 | 0.833 | 0.839 |
+| Semantic | 1.000 | 1.000 | 1.000 |
+| Hybrid | 0.917 | 1.000 | 0.958 |
+
+These numbers are a smoke test. The queries and images were written by the same author, so real-world accuracy will be lower. Run `scripts\eval_search.py` with your own `private_eval.yaml` (gitignored) to measure your own collection.
+
+## Limitations
+
+Please read these before relying on SlothShot.
+
+- **OCR is the slow part.** About 3 s per screenshot on an i3. A first index of thousands of screenshots will take hours, but it resumes where it stopped and runs in the background.
+- **OCR makes mistakes.** On the synthetic hard cases, tiny text (11 px) lost spacing, one of four dense small lines was dropped, and a blank image still cost about 3 s. Words OCR never read cannot be searched by keyword. Details are in the failure gallery in `docs/BENCHMARKS.md`.
+- **Text only.** It does not understand photos, diagrams or screenshots without text.
+- **English-first.** The default embedding model is English. Hindi, Hinglish and other languages are not supported by default, and OCR quality for them is untested. You can configure another fastembed model, but that is not evaluated here.
+- **Semantic search is a linear scan.** It is fast at thousands of screenshots (about 142 ms at 5,000 measured on scaled data) but latency grows with the number of records. There is no vector index. It has not been tested beyond 5,000 records.
+- **Keyword fallback is loose.** If no screenshot contains all your words, it retries with any word, which can surface loosely related results.
+- **Windows only in practice.** The core is cross-platform Python, but autostart and the "open folder" button target Windows. Only Windows was tested.
+- **Python 3.10 and 3.11 only**, as pinned in `pyproject.toml`.
+- **Not verified:** the at-login autostart trigger (tested by starting the task manually), the task's automatic retry-on-failure setting, and behavior on machines other than the one benchmarked.
+
+## Models and dependencies, with licenses
+
+Project license: **MIT** ([`LICENSE`](LICENSE)). Licenses below were read from installed package metadata and from the model providers' published metadata.
+
+**Models**
+
+| Model | Used for | License | Source |
+| --- | --- | --- | --- |
+| `BAAI/bge-small-en-v1.5` | Text embeddings (default) | MIT | [Hugging Face model metadata](https://huggingface.co/BAAI/bge-small-en-v1.5) |
+| `Qdrant/bge-small-en-v1.5-onnx-Q` | The quantized ONNX build of that model that `fastembed` actually downloads | MIT | [Hugging Face model metadata](https://huggingface.co/Qdrant/bge-small-en-v1.5-onnx-Q) |
+| PP-OCRv6 small detection, `PP-OCRv6_det_small.onnx` | Finding text regions | Apache-2.0 | [RapidOCR model license notice](https://rapidai.github.io/RapidOCRDocs/main/en/model_licenses/) |
+| PP-OCRv6 small recognition, `PP-OCRv6_rec_small.onnx` | Reading text | Apache-2.0 | same |
+| `ch_ppocr_mobile_v2.0_cls_mobile.onnx` | Text-angle classification | Apache-2.0 | same |
+
+**Direct dependencies**
+
+| Package | Version | License |
+| --- | --- | --- |
+| `rapidocr` | 3.10.0 | Apache-2.0 |
+| `fastembed` | 0.9.0 | Apache-2.0 |
+| `onnxruntime` | 1.23.2 | MIT |
+| `numpy` | 2.2.6 | BSD |
+| `Pillow` | 12.3.0 | MIT-CMU |
+| `PyYAML` | 6.0.3 | MIT |
+| `psutil` | 7.2.2 | BSD-3-Clause |
+| `streamlit` | 1.65.0 | Apache-2.0 |
+| `typer` | 0.27.3 | MIT |
+| `watchdog` | 6.0.0 | Apache-2.0 |
+| `pytest` (dev) | 8.4.2 | MIT |
+| `ruff` (dev) | 0.14.2 | MIT |
+
+**Transitive dependencies.** A scan of all 79 packages installed in the test environment found no GPL, AGPL or LGPL license. Two are under MPL-2.0 (`certifi`, and `tqdm` as `MPL-2.0 AND MIT`), a file-level license that is fine for unmodified use. `py_rust_stemmers` publishes no license in its PyPI metadata; its README states MIT. A few packages use free-text license strings that my scan did not classify precisely (all permissive-looking, none matching a copyleft pattern). This is a scan, not a legal review.
+
+## Development
 
 ```powershell
-slothshot ui
-slothshot ui --config .\config.toml
+python -m pip install -e ".[dev]"
+pytest                    # fast tests, no models needed
+pytest -m slow            # tests that run the real OCR/embedding models
+ruff check . ; ruff format --check .
+
+python scripts\make_sample_data.py --output data\demo --count 100
+python scripts\bench.py --output data\bench --count 100 --repeats 5
+python scripts\eval_search.py --ground-truth data\bench\screenshots\ground_truth.yaml --db data\bench\indexed.sqlite3
 ```
+
+The project type-checks cleanly with `mypy src --ignore-missing-imports` (run ad hoc, not a pinned dependency).
+
+## Roadmap
+
+- Multilingual embedding model option (for example for Hinglish), with a before/after evaluation.
+- Optional local captioning and tagging through Ollama, off by default.
+- Side-by-side comparison of OCR and embedding models, with numbers.
+- Faster OCR on low-end CPUs (smaller models, skipping near-duplicate and blank screenshots).
+- Optional encryption of the local database.
+
+## Contributing
+
+Issues and pull requests are welcome. Please keep it offline and dependency-light, and never commit real screenshots. Use `scripts/make_sample_data.py` for test images.
+
+## License
+
+[MIT](LICENSE)

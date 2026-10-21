@@ -59,8 +59,7 @@ def default_config_path() -> Path:
 
 def _expand_path(value: str, *, base: Path) -> Path:
     """Expand environment variables and resolve relative paths beside config."""
-    expanded = os.path.expandvars(os.path.expanduser(value))
-    path = Path(expanded)
+    path = Path(os.path.expandvars(value)).expanduser()
     if not path.is_absolute():
         path = base / path
     return path

@@ -122,9 +122,7 @@ def _delete_embeddings_for_path(connection: sqlite3.Connection, path: Path) -> N
             connection.execute("DELETE FROM embeddings WHERE image_id = ?", (row["id"],))
 
 
-def index_image(
-    connection: sqlite3.Connection, path: Path, reader: ImageReader
-) -> str:
+def index_image(connection: sqlite3.Connection, path: Path, reader: ImageReader) -> str:
     """Index one file, returning ``indexed``, ``reused``, ``skipped``, or ``failed``.
 
     OCR runs before opening a database write transaction. A process interruption
