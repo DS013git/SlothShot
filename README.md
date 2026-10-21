@@ -73,3 +73,15 @@ slothshot search "docker port problem" --mode hybrid
 Use `--mode semantic` for meaning-based retrieval or `--mode hybrid` (the
 default) to combine both ranked lists. Set `models.embedding` in TOML to choose
 a different FastEmbed-supported model.
+
+## Watch for new screenshots
+
+The watcher scans the folder once on startup, then watches it recursively. It
+waits for each image's size and modification time to settle before OCR, ignores
+common temporary and partial file names, and sends work to one background
+indexing thread. Stop it with Ctrl+C.
+
+```powershell
+slothshot watch
+slothshot watch "C:\path\to\screenshots" --config .\config.toml
+```

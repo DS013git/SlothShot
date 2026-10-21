@@ -19,6 +19,7 @@ from slothshot.embed import EmbeddingModel, embedding_model_cached
 from slothshot.indexer import scan_folder
 from slothshot.ocr import OCR_MODEL_FILES, OCRReader
 from slothshot.search import search_hybrid, search_keyword, search_semantic
+from slothshot.watcher import ScreenshotWatcher
 
 app = typer.Typer(help="A local, offline librarian for your screenshots.")
 logger = logging.getLogger("slothshot")
@@ -200,9 +201,7 @@ def index(
 @app.command()
 def search(
     query: str = typer.Argument(..., help="Words to find in indexed screenshots."),
-    mode: str = typer.Option(
-        "hybrid", "--mode", help="Search mode: keyword, semantic, or hybrid."
-    ),
+    mode: str = typer.Option("hybrid", "--mode", help="Search mode: keyword, semantic, or hybrid."),
     limit: int = typer.Option(20, min=1, max=100, help="Maximum number of results."),
     config_file: Path | None = typer.Option(
         None, "--config", help="Path to config.toml; defaults to the user config path."
@@ -240,6 +239,27 @@ def search(
         return
     for result in results:
         typer.echo(f"{result.path}\n  score: {result.score:.4f}\n  {result.snippet}")
+
+
+@app.command()
+def watch(
+    folder: Path | None = typer.Argument(
+        None, help="Screenshot folder; defaults to the configured watch folder."
+    ),
+    config_file: Path | None = typer.Option(
+        None, "--config", help="Path to config.toml; defaults to the user config path."
+    ),
+) -> None:
+    """Catch up the index, then watch for screenshot changes until Ctrl+C."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+    try:
+        config = load_config(config_file)
+        if folder is not None:
+            config = replace(config, watch_folder=folder.expanduser().resolve())
+        ScreenshotWatcher(config).run()
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        typer.echo(f"Could not start screenshot watcher: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":

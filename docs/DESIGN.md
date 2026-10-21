@@ -114,3 +114,20 @@ search merges FTS5 BM25 and cosine-ranked lists using Reciprocal Rank Fusion;
 ranking positions, rather than incomparable raw scores, determine the fused
 score. This simple scan fits the intended few-thousand-image scale and avoids
 an additional vector database.
+
+## Phase 5: background watcher
+
+The watcher queues its catch-up scan before starting the single SQLite worker,
+and starts the filesystem observer before releasing that worker. This ordering
+means events arriving during catch-up stay queued behind the scan and are then
+processed in order. Catch-up and live file events use the same size-and-mtime
+stability check before OCR. The watcher filters temporary suffixes and common
+editor lock files, coalesces duplicate create/modify notifications briefly,
+and handles file or directory moves and deletions.
+
+Only the worker thread opens the database connection used for indexing; the
+Streamlit UI and command-line search can keep their own reader connections.
+SQLite commits each indexed image independently, so a shutdown or process crash
+can be recovered by the next catch-up scan. Ctrl+C stops event observation,
+drains queued tasks, and closes the worker's database connection. Any image that
+has not settled before shutdown is picked up by the next catch-up scan.
