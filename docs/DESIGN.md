@@ -155,3 +155,39 @@ in the index; after an Index now run, use **Refresh stats** to clear the short
 cache. The UI logs whether the configured embedding model is already present
 in the local cache, and binds its server to `127.0.0.1` with usage statistics
 disabled.
+
+## Phase 7: synthetic evaluation and resource measurements
+
+`make_sample_data.py` produces 100 or more screenshot-like PNGs with terminal,
+code, chat, and settings content. It varies light and dark themes and includes
+smaller text. After the regular screenshots it adds five "tricky" images that
+stress known OCR weaknesses: tiny text, low contrast, an OTP-style message,
+dense config lines, and a completely blank screen. The ground-truth YAML maps
+natural-language queries to known filenames; the blank image has no query on
+purpose, so it checks that empty OCR text does not crash anything. All
+generated content is fictional and the generator never reads a screenshot
+folder.
+
+`eval_search.py` uses PyYAML's safe loader to validate a caller-provided query
+mapping, then reports top-1, top-3, and top-5 hit rate plus mean reciprocal rank
+for keyword, semantic, and hybrid search. Expected names are compared against
+result basenames so private evaluation files can refer to screenshots without
+exposing their full paths. It also prints every query a mode did not answer
+at rank 1, which is how the failure gallery in `BENCHMARKS.md` was produced.
+A private evaluation file named `private_eval*.yaml` is already in
+`.gitignore`; pass it with `--ground-truth` and `--db` pointing at your real
+index.
+
+`bench.py` measures OCR elapsed time from each reader call, embedding time for
+the indexed OCR text, total indexing wall time, and process RSS sampled during
+indexing. It fully OCRs and embeds 100 regular plus 5 tricky generated
+screenshots. To measure search
+scaling without claiming 5,000 OCR model passes, it builds 100-, 1,000-, and
+5,000-row temporary SQLite corpora by reusing OCR text and vectors from that
+real synthetic index. Keyword, semantic, and hybrid query latency are warmed
+and measured repeatedly; each corpus records its SQLite database size.
+
+The benchmark reports the machine and Python version that actually ran it.
+Benchmark results are machine-specific; the documented figures are observations
+from that run, not promises for every Windows laptop. Private evaluation files
+and generated screenshots stay under ignored local data folders.
