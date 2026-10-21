@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 from dataclasses import replace
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import typer
@@ -243,6 +244,30 @@ def search(
         typer.echo(f"{result.path}\n  score: {result.score:.4f}\n  {result.snippet}")
 
 
+def _configure_file_logging(log_file: Path) -> None:
+    """Send all logs to a size-limited file, for runs that have no console.
+
+    ``pythonw.exe`` (used by the autostart task) starts without stdout or
+    stderr, so anything written there would be lost or could raise. The file
+    rotates at 1 MiB and keeps three old copies so it never grows without bound.
+    """
+    log_file = log_file.expanduser().resolve()
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(log_file, maxBytes=1024 * 1024, backupCount=3, encoding="utf-8")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s: %(message)s",
+        handlers=[handler],
+        force=True,
+    )
+    # Third-party libraries (RapidOCR) attach their own console handlers and
+    # print to stderr; give them a harmless sink when there is no console.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+
+
 @app.command()
 def watch(
     folder: Path | None = typer.Argument(
@@ -251,15 +276,24 @@ def watch(
     config_file: Path | None = typer.Option(
         None, "--config", help="Path to config.toml; defaults to the user config path."
     ),
+    log_file: Path | None = typer.Option(
+        None,
+        "--log-file",
+        help="Write logs to this file instead of the console (used by autostart).",
+    ),
 ) -> None:
     """Catch up the index, then watch for screenshot changes until Ctrl+C."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+    if log_file is not None:
+        _configure_file_logging(log_file)
+    else:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     try:
         config = load_config(config_file)
         if folder is not None:
             config = replace(config, watch_folder=folder.expanduser().resolve())
         ScreenshotWatcher(config).run()
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        logger.error("Could not start screenshot watcher: %s", exc)
         typer.echo(f"Could not start screenshot watcher: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 

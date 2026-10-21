@@ -191,3 +191,27 @@ The benchmark reports the machine and Python version that actually ran it.
 Benchmark results are machine-specific; the documented figures are observations
 from that run, not promises for every Windows laptop. Private evaluation files
 and generated screenshots stay under ignored local data folders.
+
+## Phase 8: autostart at login
+
+Autostart runs the same `slothshot watch` command as the manual flow, so there
+is one code path to test. Three choices are worth knowing:
+
+- **Task Scheduler over the Startup folder.** A scheduled task can restart a
+  failed watcher, ignore duplicate starts, and keep running on battery. The
+  Startup folder is kept only as a fallback for machines where task registration
+  is blocked. The installer falls back automatically.
+- **`pythonw.exe` and a log file.** `pythonw.exe` starts without a console, so
+  there is no window to hide, but it also has no stdout or stderr. `watch` gained
+  a `--log-file` option that installs a rotating file handler and gives the
+  missing streams a harmless sink, so libraries that print do not crash it.
+  Startup failures are logged as well as echoed, otherwise a missing screenshots
+  folder would fail with no trace.
+- **Run as the user, without admin rights.** The task uses an interactive,
+  limited principal, so it can only touch what you can. The trade-off is that it
+  runs only while you are logged in, which is fine because screenshots are only
+  taken then.
+
+The virtual environment's `pythonw.exe` is a small launcher that starts the real
+interpreter, so one watcher shows up as two processes. `-Uninstall` and
+`-Status` find them by command line and handle both.

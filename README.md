@@ -86,6 +86,40 @@ slothshot watch
 slothshot watch "C:\path\to\screenshots" --config .\config.toml
 ```
 
+Add `--log-file path\to\watch.log` to write logs to a rotating file (1 MiB,
+three old copies) instead of the console. Autostart uses this.
+
+## Start automatically at login ("fully lazy" mode)
+
+`scripts\install_autostart.ps1` makes the watcher start quietly every time you
+log in. It needs no administrator rights and does not change your screenshots
+folder. Run it from the repository root in PowerShell, after the Phase 0 setup:
+
+```powershell
+.\scripts\install_autostart.ps1 -StartNow   # install, and start it right now
+.\scripts\install_autostart.ps1 -Status     # installed? running? last log lines
+.\scripts\install_autostart.ps1 -Uninstall  # remove it and stop the watcher
+```
+
+If PowerShell blocks the script, run it once with
+`powershell -ExecutionPolicy Bypass -File .\scripts\install_autostart.ps1`.
+
+- It registers a per-user **Task Scheduler** task (`SlothShotWatch`) that runs at
+  your login. The task launches `pythonw.exe`, the Python launcher without a
+  console window, so nothing appears on screen.
+- Logs go to `%LOCALAPPDATA%\SlothShot\logs\watch.log` (change with `-LogFile`).
+- The task keeps running on battery, has no time limit, runs only one copy, and
+  is configured to retry three times, a minute apart, if it fails (for example,
+  if the screenshots folder does not exist yet). That retry setting is not yet
+  tested.
+- If Task Scheduler is unavailable, the script falls back to a shortcut in your
+  Startup folder. Choose it directly with `-Method Startup`.
+- Pass `-ConfigFile path\to\config.toml` to use a custom config, and
+  `-PythonW` to use a different Python.
+- Running the installer again is safe: it replaces the old registration.
+- If you move or delete the repository or its `.venv`, run `-Uninstall` first, or
+  the task will keep trying to start a missing program.
+
 ## Browse with the local UI
 
 The Streamlit page binds to this computer only. It opens SQLite read-only,
