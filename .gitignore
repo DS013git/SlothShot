@@ -17,6 +17,7 @@ dist/
 *.db-wal
 data/
 screenshots/
+real-data/
 private_eval*.yml
 private_eval*.yaml
 

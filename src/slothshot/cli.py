@@ -14,6 +14,8 @@ import typer
 
 from slothshot import __version__
 from slothshot.config import AppConfig, load_config
+from slothshot.db import connect_database
+from slothshot.indexer import scan_folder
 from slothshot.ocr import OCR_MODEL_FILES, OCRReader
 
 app = typer.Typer(help="A local, offline librarian for your screenshots.")
@@ -154,6 +156,39 @@ def ocr(
     for line in result.lines:
         typer.echo(f"[{line.confidence:.3f}] {line.text}")
     typer.echo(f"Elapsed: {result.elapsed_seconds:.3f}s")
+
+
+@app.command()
+def index(
+    folder: Path = typer.Argument(..., help="Screenshot folder to scan recursively."),
+    config_file: Path | None = typer.Option(
+        None, "--config", help="Path to config.toml; defaults to the user config path."
+    ),
+) -> None:
+    """OCR and index new or changed images from a folder."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    try:
+        config = load_config(config_file)
+        connection = connect_database(config.database_path)
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        typer.echo(f"Could not prepare local database: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        summary = scan_folder(folder, connection, OCRReader(config))
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        typer.echo(f"Index scan failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        connection.close()
+
+    typer.echo(
+        "Index complete: "
+        f"{summary.found} found, {summary.indexed} indexed, {summary.reused} reused, "
+        f"{summary.skipped} unchanged, {summary.failed} failed, {summary.removed} removed"
+    )
+    if summary.failed:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

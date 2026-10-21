@@ -59,3 +59,25 @@ off by default pending a more varied evaluation.
 The dependency resolver caught a Phase 0 pin mismatch before installation:
 FastEmbed 0.9 excludes Pillow 13 on Python 3.11. Pillow is pinned to 12.3.0,
 which satisfies both OCR and embedding dependencies in the resolved install.
+
+## Phase 2: database and indexing
+
+SQLite stores one row per image path, with a SHA-256 content hash, dimensions,
+OCR text, confidence, timestamps, and a small status value. The hash is
+indexed, but not unique: two paths may point to identical screenshot bytes.
+When that happens, SlothShot reuses the OCR metadata from the existing hash and
+does not run OCR a second time. This also makes moving a file safe: indexing the
+new path restores its existing text before a later scan removes the old path.
+
+The FTS5 table is an external-content index over image paths and OCR text.
+SQLite triggers update FTS in the same transaction as the image row, so callers
+cannot forget to synchronize the two. The embeddings table is present now and
+uses a foreign key with cascading delete; embedding generation is added in
+Phase 4.
+
+Each image is hashed in 1 MiB blocks. OCR happens before a write transaction,
+then that image and its FTS entry are committed together. A stop or crash can
+lose work on the image currently being read, while earlier images stay saved.
+Folder cleanup runs only after the scan has completed, and only removes records
+under the scanned root. Invalid images are recorded with an error status so a
+bad screenshot does not abort the rest of the folder.

@@ -1,7 +1,8 @@
 # SlothShot
 
-A local, offline librarian for screenshots. The current phase reads text from
-one image with CPU ONNX OCR; indexing and search arrive in later phases.
+A local, offline librarian for screenshots. SlothShot reads text from images
+with CPU ONNX OCR and indexes it in a local SQLite database; search arrives in
+later phases.
 
 ## Phase 0 setup
 
@@ -41,3 +42,17 @@ large images, enlarges small screenshots, and converts them to grayscale.
 Dark-mode inversion is opt-in with `ocr.invert_dark_mode = true`. On one
 synthetic dark-terminal image it improved the model confidence score, but that
 single example is not enough to turn it on automatically for all screenshots.
+
+## Index a folder
+
+The index command scans recursively, recognizes supported image formats, and
+stores metadata and OCR text in the local SQLite database. It skips unchanged
+files by SHA-256 and reuses OCR text when a file is renamed or copied.
+
+```powershell
+slothshot index "$env:USERPROFILE\Pictures\Screenshots"
+slothshot index .\synthetic-screenshots --config .\config.toml
+```
+
+This phase prepares FTS5 and the embeddings table in SQLite. Keyword and
+semantic search commands are introduced in later phases.
