@@ -93,3 +93,30 @@ def test_newer_schema_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="newer than supported"):
         connect_database(database)
+
+
+def test_phase_two_database_migrates_chunk_text_column(tmp_path: Path) -> None:
+    database = tmp_path / "phase-two.sqlite3"
+    raw = sqlite3.connect(database)
+    raw.executescript(
+        """
+        CREATE TABLE images (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE);
+        CREATE TABLE embeddings (
+            image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+            chunk_index INTEGER NOT NULL,
+            model_name TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            PRIMARY KEY (image_id, chunk_index, model_name)
+        );
+        PRAGMA user_version = 1;
+        """
+    )
+    raw.close()
+
+    connection = connect_database(database)
+    try:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(embeddings)")}
+        assert "chunk_text" in columns
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    finally:
+        connection.close()

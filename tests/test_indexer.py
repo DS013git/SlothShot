@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 from PIL import Image
 
 from slothshot.db import connect_database
@@ -20,6 +21,17 @@ class FakeReader:
         return SimpleNamespace(
             text=f"words from {image_path.stem}", average_confidence=0.8, error=None
         )
+
+
+class FakeEmbedder:
+    model_name = "test-model"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def embed_documents(self, texts: list[str]) -> list[np.ndarray]:
+        self.calls += 1
+        return [np.array([1.0, float(len(texts))], dtype=np.float32) for _ in texts]
 
 
 def _save(path: Path, color: str) -> Path:
@@ -70,6 +82,30 @@ def test_renamed_and_copied_images_reuse_cached_ocr(tmp_path: Path) -> None:
         rows = connection.execute("SELECT path, ocr_text FROM images ORDER BY path").fetchall()
         assert len(rows) == 2
         assert all(row["ocr_text"] == "words from old" for row in rows)
+    finally:
+        connection.close()
+
+
+def test_renamed_images_reuse_cached_vectors_without_reembedding(tmp_path: Path) -> None:
+    folder = tmp_path / "screenshots"
+    original = _save(folder / "old.png", "white")
+    connection = _open_db(tmp_path)
+    reader = FakeReader()
+    embedder = FakeEmbedder()
+    try:
+        scan_folder(folder, connection, reader, embedder)
+        original.rename(folder / "renamed.png")
+
+        result = scan_folder(folder, connection, reader, embedder)
+
+        assert result.reused == 1
+        assert result.removed == 1
+        assert len(reader.calls) == 1
+        assert embedder.calls == 1
+        row = connection.execute("SELECT image_id, chunk_text FROM embeddings").fetchone()
+        image = connection.execute("SELECT id FROM images").fetchone()
+        assert row["image_id"] == image["id"]
+        assert row["chunk_text"] == "words from old"
     finally:
         connection.close()
 

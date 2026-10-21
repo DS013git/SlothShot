@@ -1,8 +1,8 @@
 # SlothShot
 
 A local, offline librarian for screenshots. SlothShot reads text from images
-with CPU ONNX OCR and indexes it in a local SQLite database; search arrives in
-later phases.
+with CPU ONNX OCR, indexes it in SQLite, and finds screenshots by keywords or
+meaning with local ONNX embeddings.
 
 ## Phase 0 setup
 
@@ -20,11 +20,9 @@ its database and model cache under `%LOCALAPPDATA%\SlothShot`. Copy
 `config.example.toml` to `%APPDATA%\SlothShot\config.toml` to customize paths.
 Run `slothshot doctor --config path\to\config.toml` to check a specific config.
 
-Doctor reports whether the configured model cache contains files and checks the
-Python environment and SQLite FTS5 support. Phase 1 bundles its OCR model files
-with the RapidOCR package, so there is no separate model download during OCR.
-Model licensing and dependency license details will be documented before
-release.
+Doctor checks the configured embedding model's local cache, the Python
+environment, and SQLite FTS5 support. Phase 1 bundles its OCR model files with
+RapidOCR, so OCR needs no separate model download.
 
 ## Read one screenshot
 
@@ -46,16 +44,17 @@ single example is not enough to turn it on automatically for all screenshots.
 ## Index a folder
 
 The index command scans recursively, recognizes supported image formats, and
-stores metadata and OCR text in the local SQLite database. It skips unchanged
-files by SHA-256 and reuses OCR text when a file is renamed or copied.
+stores metadata, OCR text, and local text embeddings in SQLite. It skips
+unchanged files by SHA-256 and reuses OCR and vectors when a file is renamed or
+copied.
 
 ```powershell
 slothshot index "$env:USERPROFILE\Pictures\Screenshots"
 slothshot index .\synthetic-screenshots --config .\config.toml
 ```
 
-The database includes an FTS5 index for OCR text and an embeddings table ready
-for later use. Semantic and hybrid search arrive in Phase 4.
+The first indexing or semantic-search run downloads the configured embedding
+model if needed. Later uses load it from the cache, with network access disabled.
 
 ## Search indexed text
 
@@ -67,6 +66,10 @@ term so longer queries can still return candidates.
 ```powershell
 slothshot search "docker port" --mode keyword
 slothshot search "address already in" --mode keyword --limit 5
+slothshot search "docker port problem" --mode semantic
+slothshot search "docker port problem" --mode hybrid
 ```
 
-Search mode is keyword-only until semantic and hybrid search arrive in Phase 4.
+Use `--mode semantic` for meaning-based retrieval or `--mode hybrid` (the
+default) to combine both ranked lists. Set `models.embedding` in TOML to choose
+a different FastEmbed-supported model.

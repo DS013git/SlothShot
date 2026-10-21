@@ -6,6 +6,10 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
+import numpy as np
+
+from slothshot.embed import EmbeddingModel
+
 
 @dataclass(frozen=True)
 class SearchResult:
@@ -78,8 +82,112 @@ def _run_search(
         SearchResult(
             image_id=int(row["id"]),
             path=str(row["path"]),
-            score=float(row["score"]),
+            # SQLite's BM25 values are negative; invert the sign so that
+            # higher scores consistently mean a stronger match across modes.
+            score=-float(row["score"]),
             snippet=str(row["snippet"]),
         )
         for row in rows
     ]
+
+
+def cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
+    """Return cosine similarity, safely handling empty and zero-length vectors."""
+    left = np.asarray(left, dtype=np.float32).reshape(-1)
+    right = np.asarray(right, dtype=np.float32).reshape(-1)
+    if left.shape != right.shape:
+        raise ValueError("Embedding vectors must have the same number of dimensions")
+    denominator = float(np.linalg.norm(left) * np.linalg.norm(right))
+    if denominator == 0.0:
+        return 0.0
+    return float(np.dot(left, right) / denominator)
+
+
+def search_semantic(
+    connection: sqlite3.Connection,
+    query: str,
+    model: EmbeddingModel,
+    *,
+    limit: int = 20,
+) -> list[SearchResult]:
+    """Find nearest OCR chunks by exact cosine similarity on local vectors."""
+    if limit < 1:
+        raise ValueError("limit must be a positive integer")
+    if not query.strip():
+        return []
+    vector_count = connection.execute(
+        "SELECT count(*) FROM embeddings WHERE model_name = ?", (model.model_name,)
+    ).fetchone()[0]
+    if not vector_count:
+        return []
+    query_vector = model.embed_query(query).reshape(-1)
+    rows = connection.execute(
+        """SELECT e.image_id, e.embedding, e.chunk_text, i.path
+           FROM embeddings AS e
+           JOIN images AS i ON i.id = e.image_id
+           WHERE e.model_name = ? AND i.status = 'indexed'""",
+        (model.model_name,),
+    )
+    best_by_image: dict[int, SearchResult] = {}
+    for row in rows:
+        vector = np.frombuffer(row["embedding"], dtype=np.float32)
+        if vector.size != query_vector.size:
+            continue
+        score = cosine_similarity(query_vector, vector)
+        image_id = int(row["image_id"])
+        current = best_by_image.get(image_id)
+        if current is None or score > current.score:
+            best_by_image[image_id] = SearchResult(
+                image_id=image_id,
+                path=str(row["path"]),
+                score=score,
+                snippet=str(row["chunk_text"]),
+            )
+    return sorted(best_by_image.values(), key=lambda item: (-item.score, item.image_id))[:limit]
+
+
+def reciprocal_rank_fusion(
+    *rankings: list[SearchResult],
+    limit: int = 20,
+    rank_constant: int = 60,
+) -> list[SearchResult]:
+    """Merge ranked result lists using Reciprocal Rank Fusion (RRF)."""
+    if limit < 1:
+        raise ValueError("limit must be a positive integer")
+    if rank_constant < 0:
+        raise ValueError("rank_constant must not be negative")
+    scores: dict[int, float] = {}
+    details: dict[int, SearchResult] = {}
+    for ranking in rankings:
+        for rank, result in enumerate(ranking, start=1):
+            scores[result.image_id] = scores.get(result.image_id, 0.0) + 1.0 / (
+                rank_constant + rank
+            )
+            existing = details.get(result.image_id)
+            # Keep the keyword-highlighted snippet when available; otherwise
+            # the text from the closest semantic chunk is the best context.
+            if existing is None or ("[" not in existing.snippet and "[" in result.snippet):
+                details[result.image_id] = result
+    ordered_ids = sorted(scores, key=lambda image_id: (-scores[image_id], image_id))[:limit]
+    return [
+        SearchResult(
+            image_id=image_id,
+            path=details[image_id].path,
+            score=scores[image_id],
+            snippet=details[image_id].snippet,
+        )
+        for image_id in ordered_ids
+    ]
+
+
+def search_hybrid(
+    connection: sqlite3.Connection,
+    query: str,
+    model: EmbeddingModel,
+    *,
+    limit: int = 20,
+) -> list[SearchResult]:
+    """Combine FTS5 and semantic rankings with reciprocal rank fusion."""
+    keyword_results = search_keyword(connection, query, limit=limit)
+    semantic_results = search_semantic(connection, query, model, limit=limit)
+    return reciprocal_rank_fusion(keyword_results, semantic_results, limit=limit)

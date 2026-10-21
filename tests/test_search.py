@@ -65,7 +65,7 @@ def test_keyword_search_prefers_all_terms_and_marks_matching_snippet(tmp_path: P
         assert [result.image_id for result in results] == [expected_id]
         assert "[docker]" in results[0].snippet
         assert "[port]" in results[0].snippet
-        assert results[0].score < 0
+        assert results[0].score > 0
     finally:
         connection.close()
 

@@ -13,11 +13,12 @@ from pathlib import Path
 import typer
 
 from slothshot import __version__
-from slothshot.config import AppConfig, load_config
+from slothshot.config import load_config
 from slothshot.db import connect_database
+from slothshot.embed import EmbeddingModel, embedding_model_cached
 from slothshot.indexer import scan_folder
 from slothshot.ocr import OCR_MODEL_FILES, OCRReader
-from slothshot.search import search_keyword
+from slothshot.search import search_hybrid, search_keyword, search_semantic
 
 app = typer.Typer(help="A local, offline librarian for your screenshots.")
 logger = logging.getLogger("slothshot")
@@ -26,11 +27,6 @@ logger = logging.getLogger("slothshot")
 @app.callback()
 def main() -> None:
     """Manage local screenshot indexing and search."""
-
-
-def _model_cache_present(config: AppConfig) -> bool:
-    """Return whether the configured model cache contains any downloaded files."""
-    return config.model_cache.is_dir() and any(config.model_cache.rglob("*"))
 
 
 def _bundled_ocr_status() -> tuple[bool, str]:
@@ -109,16 +105,25 @@ def doctor(
     typer.echo(f"Watch folder: {'exists' if watch_exists else 'missing'} ({config.watch_folder})")
     okay &= watch_exists
 
-    cache_present = _model_cache_present(config)
+    try:
+        cache_present = embedding_model_cached(config.embedding_model, config.model_cache)
+    except (ImportError, OSError, ValueError) as exc:
+        cache_present = False
+        logger.warning("Could not inspect the embedding model cache: %s", exc)
     if cache_present:
-        logger.info("Embedding model cache found locally at %s.", config.model_cache)
-        typer.echo(f"Embedding model cache: files found ({config.model_cache})")
-    else:
         logger.info(
-            "Embedding model cache is empty at %s; it will be downloaded on first semantic use.",
+            "Embedding model %s is cached locally under %s",
+            config.embedding_model,
             config.model_cache,
         )
-        typer.echo(f"Embedding model cache: empty ({config.model_cache})")
+        typer.echo(f"Embedding model cache: ready for {config.embedding_model}")
+    else:
+        logger.info(
+            "Embedding model %s is not cached under %s; first semantic use may download it.",
+            config.embedding_model,
+            config.model_cache,
+        )
+        typer.echo(f"Embedding model cache: not found for {config.embedding_model}")
 
     typer.echo(f"Database: {config.database_path}")
     typer.echo(f"SlothShot: {__version__}")
@@ -176,8 +181,8 @@ def index(
         raise typer.Exit(code=1) from exc
 
     try:
-        summary = scan_folder(folder, connection, OCRReader(config))
-    except (OSError, ValueError, sqlite3.Error) as exc:
+        summary = scan_folder(folder, connection, OCRReader(config), EmbeddingModel(config))
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         typer.echo(f"Index scan failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     finally:
@@ -195,16 +200,18 @@ def index(
 @app.command()
 def search(
     query: str = typer.Argument(..., help="Words to find in indexed screenshots."),
-    mode: str = typer.Option("keyword", "--mode", help="Search mode (keyword in this phase)."),
+    mode: str = typer.Option(
+        "hybrid", "--mode", help="Search mode: keyword, semantic, or hybrid."
+    ),
     limit: int = typer.Option(20, min=1, max=100, help="Maximum number of results."),
     config_file: Path | None = typer.Option(
         None, "--config", help="Path to config.toml; defaults to the user config path."
     ),
 ) -> None:
-    """Find screenshot text by exact words and word prefixes."""
+    """Find screenshot text by exact words, meaning, or both."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    if mode != "keyword":
-        typer.echo("This phase supports only --mode keyword.", err=True)
+    if mode not in {"keyword", "semantic", "hybrid"}:
+        typer.echo("Choose --mode keyword, semantic, or hybrid.", err=True)
         raise typer.Exit(code=2)
     try:
         config = load_config(config_file)
@@ -214,8 +221,15 @@ def search(
         raise typer.Exit(code=1) from exc
 
     try:
-        results = search_keyword(connection, query, limit=limit)
-    except (ValueError, sqlite3.Error) as exc:
+        if mode == "keyword":
+            results = search_keyword(connection, query, limit=limit)
+        else:
+            embedder = EmbeddingModel(config)
+            if mode == "semantic":
+                results = search_semantic(connection, query, embedder, limit=limit)
+            else:
+                results = search_hybrid(connection, query, embedder, limit=limit)
+    except (ValueError, RuntimeError, sqlite3.Error) as exc:
         typer.echo(f"Search failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     finally:

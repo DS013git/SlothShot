@@ -93,3 +93,24 @@ Short queries first require all terms, which favors precision. If no image
 contains every term, the search retries with OR so a longer natural-language
 query can still return candidates. This avoids treating sentence-like search
 input as a strict intersection that silently produces no results.
+
+## Phase 4: semantic and hybrid search
+
+FastEmbed 0.9.0's installed API accepts `cache_dir`, `threads`, `cuda`, and
+`local_files_only` through `TextEmbedding`. Its supported-model metadata lists
+`BAAI/bge-small-en-v1.5` as a 384-dimensional, MIT-licensed model. SlothShot
+checks the configured Hugging Face snapshot for the model ONNX file and
+tokenizer files before loading: a cached model is opened with
+`local_files_only=True`; only a cache miss permits the first-use download.
+Inference is CPU-only with two ONNX threads and one small embedding batch at a
+time.
+
+OCR text is chunked near 1,600 characters at word boundaries to stay within the
+model's 512-token truncation limit. Each vector is stored as float32 bytes with
+its model name and source text in SQLite. A schema migration adds that chunk
+text to existing Phase 2 databases. Semantic search computes exact cosine
+similarity against stored chunks and keeps the best chunk per image. Hybrid
+search merges FTS5 BM25 and cosine-ranked lists using Reciprocal Rank Fusion;
+ranking positions, rather than incomparable raw scores, determine the fused
+score. This simple scan fits the intended few-thousand-image scale and avoids
+an additional vector database.

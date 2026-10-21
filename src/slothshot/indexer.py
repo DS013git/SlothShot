@@ -13,6 +13,11 @@ from typing import Protocol
 from PIL import Image, UnidentifiedImageError
 
 from slothshot.db import image_by_hash, image_by_path
+from slothshot.embed import (
+    EmbeddingModel,
+    reuse_embeddings_for_hash,
+    save_image_embeddings,
+)
 
 logger = logging.getLogger("slothshot.indexer")
 SUPPORTED_IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
@@ -193,6 +198,7 @@ def scan_folder(
     folder: Path,
     connection: sqlite3.Connection,
     reader: ImageReader,
+    embedder: EmbeddingModel | None = None,
 ) -> IndexSummary:
     """Index supported images under ``folder`` and remove stale entries.
 
@@ -211,6 +217,19 @@ def scan_folder(
     for path in paths:
         outcome = index_image(connection, path, reader)
         counts[outcome] += 1
+        if embedder is not None and outcome != "failed":
+            row = image_by_path(connection, path)
+            if row is not None and row["status"] == "indexed":
+                if outcome == "reused":
+                    reuse_embeddings_for_hash(
+                        connection, image_id=int(row["id"]), sha256=str(row["sha256"])
+                    )
+                save_image_embeddings(
+                    connection,
+                    image_id=int(row["id"]),
+                    text=str(row["ocr_text"]),
+                    model=embedder,
+                )
 
     # Limit cleanup to descendants of this root; indexing another directory
     # must never remove records owned by a different scan.

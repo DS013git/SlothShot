@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 
 logger = logging.getLogger("slothshot.db")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def connect_database(path: Path | str) -> sqlite3.Connection:
@@ -36,6 +36,20 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             f"{SCHEMA_VERSION}. Upgrade SlothShot before opening this database."
         )
     if version == SCHEMA_VERSION:
+        return
+
+    if version == 1:
+        # Phase 4 records the exact OCR chunk beside each vector so semantic
+        # search can show the text chunk that produced a match.
+        connection.executescript(
+            """
+            BEGIN;
+            ALTER TABLE embeddings ADD COLUMN chunk_text TEXT NOT NULL DEFAULT '';
+            PRAGMA user_version = 2;
+            COMMIT;
+            """
+        )
+        logger.info("Migrated SlothShot database schema to version %d", SCHEMA_VERSION)
         return
 
     # FTS5 is an external-content index. Triggers keep it synchronized inside
@@ -85,10 +99,11 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             chunk_index INTEGER NOT NULL,
             model_name TEXT NOT NULL,
             embedding BLOB NOT NULL,
+            chunk_text TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (image_id, chunk_index, model_name)
         );
         INSERT INTO images_fts(images_fts) VALUES ('rebuild');
-        PRAGMA user_version = 1;
+        PRAGMA user_version = 2;
         COMMIT;
         """
     )
