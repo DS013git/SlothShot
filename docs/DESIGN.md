@@ -134,10 +134,12 @@ has not settled before shutdown is picked up by the next catch-up scan.
 
 ## Phase 6: local Streamlit UI
 
-The UI opens the existing SQLite file with `mode=ro` and enables SQLite's
-`query_only` setting. Its search operations use short-lived read-only
-connections, so searches work whether or not the background watcher is
-running. The **Index now** button starts the existing CLI index command as a
+The UI's search and display operations open the existing SQLite file with
+`mode=ro` and enable SQLite's `query_only` setting. Search uses short-lived
+read-only connections, so it works whether or not the background watcher is
+running. A reviewed **Rename file** action opens a separate write connection,
+renames one image in place, updates its indexed path in a SQLite transaction,
+and never overwrites an existing file. The **Index now** button starts the existing CLI index command as a
 separate child process and records its output in the local app-data folder;
 it does not turn the UI's connection into a writer or hold the page while OCR
 and embedding run.
@@ -147,7 +149,8 @@ and local open-image and open-folder actions. Snippet text is HTML-escaped
 before FTS highlight markers become `<mark>` elements. Streamlit's copyable
 code block provides a browser-side copy button without sending paths to a
 clipboard service. Thumbnails are reduced to a bounded size and cached in
-memory; the source images are never copied or modified.
+memory. OCR text can suggest a concise app/site and page name; the user reviews
+or edits it before choosing to rename that image.
 
 The sidebar reads totals and the last successful index time from SQLite. Its
 pending count is a cached estimate of supported image paths not yet recorded
