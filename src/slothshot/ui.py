@@ -40,6 +40,15 @@ class IndexSnapshot:
     indexed_paths: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class BulkRenameCandidate:
+    """One indexed screenshot and its safe OCR-based destination name."""
+
+    image_id: int
+    source: Path
+    destination_name: str
+
+
 def _readonly_connection(database_path: Path) -> sqlite3.Connection:
     """Open the existing index in read-only mode without creating its folder."""
     connection = sqlite3.connect(
@@ -399,6 +408,54 @@ def _ocr_text_for_image(database_path: Path, image_id: int) -> str:
         connection.close()
 
 
+def bulk_rename_candidates(
+    database_path: Path, watch_folder: Path
+) -> tuple[list[BulkRenameCandidate], int]:
+    """Build a safe rename preview for indexed files inside the watch folder."""
+    if not database_path.is_file():
+        return [], 0
+
+    root = watch_folder.expanduser().resolve()
+    connection = _readonly_connection(database_path)
+    try:
+        rows = connection.execute(
+            "SELECT id, path, ocr_text FROM images "
+            "WHERE status = 'indexed' ORDER BY path COLLATE NOCASE"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    candidates: list[BulkRenameCandidate] = []
+    destinations: set[str] = set()
+    skipped = 0
+    for row in rows:
+        source = Path(str(row["path"])).expanduser().resolve()
+        try:
+            source.relative_to(root)
+        except ValueError:
+            skipped += 1
+            continue
+        if not source.is_file():
+            skipped += 1
+            continue
+
+        destination_name = suggest_filename(str(row["ocr_text"] or ""), source)
+        destination = source.with_name(destination_name)
+        if destination == source:
+            continue
+
+        destination_key = os.path.normcase(str(destination))
+        if destination.exists() or destination_key in destinations:
+            skipped += 1
+            continue
+
+        destinations.add(destination_key)
+        candidates.append(
+            BulkRenameCandidate(int(row["id"]), source, destination_name)
+        )
+    return candidates, skipped
+
+
 def rename_indexed_image(
     database_path: Path, image_id: int, old_path: Path, new_name: str, watch_folder: Path
 ) -> Path:
@@ -493,6 +550,43 @@ def _start_index_process(config: AppConfig, config_path: Path | None) -> subproc
         )
 
 
+def _apply_bulk_rename(config: AppConfig) -> None:
+    """Apply the confirmed preview one file at a time without overwriting files."""
+    candidates = st.session_state.get("bulk_rename_candidates", [])
+    renamed_paths: dict[str, str] = {}
+    renamed = 0
+    failed = 0
+    for candidate in candidates:
+        try:
+            destination = rename_indexed_image(
+                config.database_path,
+                candidate.image_id,
+                candidate.source,
+                candidate.destination_name,
+                config.watch_folder,
+            )
+        except (FileExistsError, FileNotFoundError, OSError, ValueError, sqlite3.Error):
+            failed += 1
+            logger.exception("Could not bulk-rename screenshot %s", candidate.source)
+            continue
+        renamed_paths[str(candidate.source)] = str(destination)
+        renamed += 1
+
+    if renamed_paths:
+        st.session_state["search_results"] = [
+            replace(item, path=renamed_paths.get(item.path, item.path))
+            for item in st.session_state.get("search_results", [])
+        ]
+    st.session_state["bulk_rename_feedback"] = (
+        f"Renamed {renamed} screenshot(s); skipped {failed} that changed or could not be renamed."
+    )
+    st.session_state.pop("bulk_rename_candidates", None)
+    st.session_state.pop("bulk_rename_skipped", None)
+    st.session_state.pop("confirm_bulk_rename", None)
+    load_index_snapshot.clear()
+    count_pending_files.clear()
+
+
 def _format_timestamp(value: str | None) -> str:
     """Show stored ISO timestamps in a compact local-time format."""
     if not value:
@@ -552,6 +646,60 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
             st.sidebar.success("Indexing started in the background.")
         except OSError as exc:
             st.sidebar.error(f"Could not start indexing: {exc}")
+
+    feedback = st.session_state.pop("bulk_rename_feedback", None)
+    if feedback:
+        st.sidebar.success(feedback)
+
+    if st.sidebar.button(
+        "Rename all screenshots",
+        disabled=index_disabled or snapshot.total == 0,
+        use_container_width=True,
+        help="Review OCR-based filename suggestions, then confirm before changing files.",
+    ):
+        try:
+            candidates, skipped = bulk_rename_candidates(
+                config.database_path, config.watch_folder
+            )
+            st.session_state["bulk_rename_candidates"] = candidates
+            st.session_state["bulk_rename_skipped"] = skipped
+            st.session_state["confirm_bulk_rename"] = True
+        except (OSError, sqlite3.Error) as exc:
+            st.sidebar.error(f"Could not prepare rename preview: {exc}")
+
+    if st.session_state.get("confirm_bulk_rename"):
+        candidates = st.session_state.get("bulk_rename_candidates", [])
+        skipped = st.session_state.get("bulk_rename_skipped", 0)
+        if candidates:
+            st.sidebar.warning(
+                f"Rename {len(candidates)} screenshot(s) in the configured folder using "
+                "saved OCR text? Files already using the suggested name and name conflicts "
+                "will be skipped."
+            )
+        else:
+            st.sidebar.info("No screenshots need renaming based on their saved OCR text.")
+        for candidate in candidates[:5]:
+            st.sidebar.caption(f"{candidate.source.name} → {candidate.destination_name}")
+        if len(candidates) > 5:
+            st.sidebar.caption(f"…and {len(candidates) - 5} more")
+        if skipped:
+            st.sidebar.caption(f"{skipped} screenshot(s) will be skipped.")
+        confirm_columns = st.sidebar.columns(2)
+        if confirm_columns[0].button(
+            f"Rename {len(candidates)} files",
+            disabled=index_disabled or not candidates,
+            key="confirm-bulk-rename",
+            use_container_width=True,
+        ):
+            _apply_bulk_rename(config)
+            st.rerun()
+        if confirm_columns[1].button(
+            "Cancel", key="cancel-bulk-rename", use_container_width=True
+        ):
+            st.session_state.pop("bulk_rename_candidates", None)
+            st.session_state.pop("bulk_rename_skipped", None)
+            st.session_state.pop("confirm_bulk_rename", None)
+            st.rerun()
 
     if st.sidebar.button("Refresh stats", use_container_width=True):
         load_index_snapshot.clear()
