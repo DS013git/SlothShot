@@ -20,6 +20,7 @@ class AppConfig:
     data_dir: Path
     model_cache: Path
     embedding_model: str = "BAAI/bge-small-en-v1.5"
+    vision_model: str = "qwen3-vl:2b-instruct"
     max_image_side: int = 1600
     preprocess: bool = True
     invert_dark_mode: bool = False
@@ -174,10 +175,13 @@ def load_config(path: Path | None = None) -> AppConfig:
         raise ValueError("ocr.max_image_side must be a positive integer")
 
     embedding_model = models.get("embedding", defaults.embedding_model)
+    vision_model = models.get("vision", defaults.vision_model)
     preprocess = ocr.get("preprocess", defaults.preprocess)
     invert_dark_mode = ocr.get("invert_dark_mode", defaults.invert_dark_mode)
     if not isinstance(embedding_model, str) or not embedding_model.strip():
         raise ValueError("models.embedding must be a non-empty string")
+    if not isinstance(vision_model, str) or not vision_model.strip():
+        raise ValueError("models.vision must be a non-empty string")
     if not isinstance(preprocess, bool):
         raise ValueError("ocr.preprocess must be true or false")
     if not isinstance(invert_dark_mode, bool):
@@ -197,6 +201,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         data_dir=data_dir,
         model_cache=path_value("model_cache", data_dir / "models"),
         embedding_model=embedding_model.strip(),
+        vision_model=vision_model.strip(),
         max_image_side=max_image_side,
         preprocess=preprocess,
         invert_dark_mode=invert_dark_mode,

@@ -130,9 +130,26 @@ def suggest_filename(ocr_text: str, current_path: Path) -> str:
     return f"{stem}{current_path.suffix.lower()}"
 
 
-def unique_suggested_filename(ocr_text: str, current_path: Path) -> str:
-    """Add a numeric suffix when another file already uses the OCR suggestion."""
-    suggested = suggest_filename(ocr_text, current_path)
+def filename_from_description(description: str, current_path: Path) -> str:
+    """Sanitize a visual-model description into a Windows-safe filename."""
+    lines = unicodedata.normalize("NFKC", description).splitlines()
+    text = lines[0].strip() if lines else ""
+    text = re.sub(r"(?i)^(?:filename|name)\s*:\s*", "", text)
+    text = text.strip(" `\"'")
+    if Path(text).suffix.casefold() == current_path.suffix.casefold():
+        text = Path(text).stem
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", text)
+    stem = re.sub(r"\s+", " ", stem).strip(" .")[:90].rstrip(" .")
+    if not stem or stem.upper() in {
+        "CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }:
+        raise ValueError("The vision model did not suggest a valid filename.")
+    return f"{stem}{current_path.suffix.lower()}"
+
+
+def unique_filename(suggested: str, current_path: Path) -> str:
+    """Add a numeric suffix when another file already uses the suggested name."""
     if suggested == current_path.name:
         return suggested
 

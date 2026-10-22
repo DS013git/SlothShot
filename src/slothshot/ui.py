@@ -41,11 +41,10 @@ class IndexSnapshot:
 
 @dataclass(frozen=True)
 class BulkRenameCandidate:
-    """One indexed screenshot and its safe OCR-based destination name."""
+    """One indexed screenshot selected for vision-based renaming."""
 
     image_id: int
     source: Path
-    destination_name: str
 
 
 def _readonly_connection(database_path: Path) -> sqlite3.Connection:
@@ -296,14 +295,13 @@ def bulk_rename_candidates(
     connection = _readonly_connection(database_path)
     try:
         rows = connection.execute(
-            "SELECT id, path, ocr_text FROM images "
+            "SELECT id, path FROM images "
             "WHERE status = 'indexed' ORDER BY path COLLATE NOCASE"
         ).fetchall()
     finally:
         connection.close()
 
     candidates: list[BulkRenameCandidate] = []
-    destinations: set[str] = set()
     skipped = 0
     for row in rows:
         source = Path(str(row["path"])).expanduser().resolve()
@@ -316,20 +314,7 @@ def bulk_rename_candidates(
             skipped += 1
             continue
 
-        destination_name = suggest_filename(str(row["ocr_text"] or ""), source)
-        destination = source.with_name(destination_name)
-        if destination == source:
-            continue
-
-        destination_key = os.path.normcase(str(destination))
-        if destination.exists() or destination_key in destinations:
-            skipped += 1
-            continue
-
-        destinations.add(destination_key)
-        candidates.append(
-            BulkRenameCandidate(int(row["id"]), source, destination_name)
-        )
+        candidates.append(BulkRenameCandidate(int(row["id"]), source))
     return candidates, skipped
 
 
@@ -364,41 +349,36 @@ def _start_index_process(config: AppConfig, config_path: Path | None) -> subproc
         )
 
 
-def _apply_bulk_rename(config: AppConfig) -> None:
-    """Apply the confirmed preview one file at a time without overwriting files."""
-    candidates = st.session_state.get("bulk_rename_candidates", [])
-    renamed_paths: dict[str, str] = {}
-    renamed = 0
-    failed = 0
-    for candidate in candidates:
-        try:
-            destination = rename_indexed_image(
-                config.database_path,
-                candidate.image_id,
-                candidate.source,
-                candidate.destination_name,
-                config.watch_folder,
-            )
-        except (FileExistsError, FileNotFoundError, OSError, ValueError, sqlite3.Error):
-            failed += 1
-            logger.exception("Could not bulk-rename screenshot %s", candidate.source)
-            continue
-        renamed_paths[str(candidate.source)] = str(destination)
-        renamed += 1
+def _start_rename_all_process(
+    config: AppConfig, config_path: Path | None
+) -> subprocess.Popen[bytes]:
+    """Run the confirmed vision-based bulk rename outside the Streamlit process."""
+    command = [
+        sys.executable,
+        "-m",
+        "slothshot.cli",
+        "rename-all",
+        str(config.watch_folder),
+    ]
+    environment = os.environ.copy()
+    environment["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+    if config_path is not None:
+        command.extend(["--config", str(config_path)])
+        environment["SLOTHSHOT_CONFIG_PATH"] = str(config_path)
+    else:
+        environment.pop("SLOTHSHOT_CONFIG_PATH", None)
 
-    if renamed_paths:
-        st.session_state["search_results"] = [
-            replace(item, path=renamed_paths.get(item.path, item.path))
-            for item in st.session_state.get("search_results", [])
-        ]
-    st.session_state["bulk_rename_feedback"] = (
-        f"Renamed {renamed} screenshot(s); skipped {failed} that changed or could not be renamed."
-    )
-    st.session_state.pop("bulk_rename_candidates", None)
-    st.session_state.pop("bulk_rename_skipped", None)
-    st.session_state.pop("confirm_bulk_rename", None)
-    load_index_snapshot.clear()
-    count_pending_files.clear()
+    log_path = config.data_dir / "ui-rename.log"
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    with log_path.open("ab") as log_file:
+        return subprocess.Popen(
+            command,
+            env=environment,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            creationflags=creation_flags,
+        )
 
 
 def _format_timestamp(value: str | None) -> str:
@@ -455,12 +435,26 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
                 f"Indexing exited with code {return_code}. See {config.data_dir / 'ui-index.log'}."
             )
 
-    index_disabled = process is not None and process.poll() is None
+    rename_process = st.session_state.get("rename_all_process")
+    rename_running = rename_process is not None and rename_process.poll() is None
+    if rename_running:
+        st.sidebar.info("Vision model is renaming screenshots in the background.")
+    elif rename_process is not None and rename_process.poll() == 0:
+        st.sidebar.success(
+            f"Vision renaming finished. See {config.data_dir / 'ui-rename.log'} for details."
+        )
+    elif rename_process is not None:
+        st.sidebar.error(
+            f"Vision renaming exited with code {rename_process.returncode}. "
+            f"See {config.data_dir / 'ui-rename.log'}."
+        )
+
+    index_disabled = (process is not None and process.poll() is None) or rename_running
     if st.sidebar.button(
         "Index now",
         disabled=index_disabled,
         use_container_width=True,
-        help="Index new or changed screenshots, then rename them from OCR text in the background.",
+        help="Index new or changed screenshots, then ask the local vision model for filenames.",
     ):
         try:
             st.session_state["index_process"] = _start_index_process(config, config_path)
@@ -468,15 +462,11 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
         except OSError as exc:
             st.sidebar.error(f"Could not start indexing: {exc}")
 
-    feedback = st.session_state.pop("bulk_rename_feedback", None)
-    if feedback:
-        st.sidebar.success(feedback)
-
     if st.sidebar.button(
         "Rename all screenshots",
         disabled=index_disabled or snapshot.total == 0,
         use_container_width=True,
-        help="Review OCR-based filename suggestions, then confirm before changing files.",
+        help="Ask the local vision model to rename indexed screenshots after confirmation.",
     ):
         try:
             candidates, skipped = bulk_rename_candidates(
@@ -493,26 +483,35 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
         skipped = st.session_state.get("bulk_rename_skipped", 0)
         if candidates:
             st.sidebar.warning(
-                f"Rename {len(candidates)} screenshot(s) in the configured folder using "
-                "saved OCR text? Files already using the suggested name and name conflicts "
-                "will be skipped."
+                f"Ask {config.vision_model} to inspect and rename {len(candidates)} "
+                "indexed screenshot(s) in the configured folder? This runs locally and "
+                "may take a while."
             )
         else:
-            st.sidebar.info("No screenshots need renaming based on their saved OCR text.")
+            st.sidebar.info("No indexed screenshots are available to rename.")
         for candidate in candidates[:5]:
-            st.sidebar.caption(f"{candidate.source.name} → {candidate.destination_name}")
+            st.sidebar.caption(f"Will inspect: {candidate.source.name}")
         if len(candidates) > 5:
             st.sidebar.caption(f"…and {len(candidates) - 5} more")
         if skipped:
             st.sidebar.caption(f"{skipped} screenshot(s) will be skipped.")
         confirm_columns = st.sidebar.columns(2)
         if confirm_columns[0].button(
-            f"Rename {len(candidates)} files",
+            f"Yes, rename {len(candidates)} files",
             disabled=index_disabled or not candidates,
             key="confirm-bulk-rename",
             use_container_width=True,
         ):
-            _apply_bulk_rename(config)
+            try:
+                st.session_state["rename_all_process"] = _start_rename_all_process(
+                    config, config_path
+                )
+            except OSError as exc:
+                st.sidebar.error(f"Could not start vision renaming: {exc}")
+                return snapshot
+            st.session_state.pop("bulk_rename_candidates", None)
+            st.session_state.pop("bulk_rename_skipped", None)
+            st.session_state.pop("confirm_bulk_rename", None)
             st.rerun()
         if confirm_columns[1].button(
             "Cancel", key="cancel-bulk-rename", use_container_width=True

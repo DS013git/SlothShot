@@ -20,9 +20,10 @@ from slothshot.config import load_config
 from slothshot.db import connect_database
 from slothshot.embed import EmbeddingModel, embedding_model_cached
 from slothshot.indexer import scan_folder
-from slothshot.naming import rename_indexed_image, unique_suggested_filename
+from slothshot.naming import filename_from_description, rename_indexed_image, unique_filename
 from slothshot.ocr import OCR_MODEL_FILES, OCRReader
 from slothshot.search import search_hybrid, search_keyword, search_semantic
+from slothshot.vision import VisionModelError, describe_screenshot
 from slothshot.watcher import ScreenshotWatcher
 
 app = typer.Typer(help="A local, offline librarian for your screenshots.")
@@ -175,7 +176,7 @@ def index(
     rename_new: bool = typer.Option(
         False,
         "--rename-new",
-        help="Automatically rename newly indexed screenshots from their saved OCR text.",
+        help="Use the local vision model to name newly indexed screenshots.",
     ),
     config_file: Path | None = typer.Option(
         None, "--config", help="Path to config.toml; defaults to the user config path."
@@ -183,6 +184,11 @@ def index(
 ) -> None:
     """OCR and index new or changed images from a folder."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    if not folder.expanduser().is_dir():
+        typer.echo(
+            f"Screenshot folder does not exist or is not a directory: {folder}", err=True
+        )
+        raise typer.Exit(code=1)
     try:
         config = load_config(config_file)
         connection = connect_database(config.database_path)
@@ -190,11 +196,22 @@ def index(
         typer.echo(f"Could not prepare local database: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    rename_counts = {"renamed": 0, "skipped": 0}
+    rename_counts = {"renamed": 0, "skipped": 0, "failed": 0}
 
     def rename_new_image(image_id: int, path: Path, ocr_text: str) -> None:
-        suggested_name = unique_suggested_filename(ocr_text, path)
+        if rename_counts["failed"]:
+            return
+        try:
+            description = describe_screenshot(path, ocr_text, config.vision_model)
+            suggested_name = unique_filename(
+                filename_from_description(description, path), path
+            )
+        except (OSError, ValueError, VisionModelError) as exc:
+            rename_counts["failed"] += 1
+            logger.error("Could not name new screenshot %s: %s", path, exc)
+            return
         if suggested_name == path.name:
+            rename_counts["skipped"] += 1
             return
         try:
             rename_indexed_image(
@@ -228,10 +245,79 @@ def index(
     if rename_new:
         typer.echo(
             f"Automatic renaming: {rename_counts['renamed']} renamed, "
-            f"{rename_counts['skipped']} skipped"
+            f"{rename_counts['skipped']} skipped, {rename_counts['failed']} model error(s)"
         )
     if summary.failed:
         raise typer.Exit(code=1)
+    if rename_counts["failed"]:
+        raise typer.Exit(code=2)
+
+
+@app.command("rename-all")
+def rename_all(
+    folder: Path = typer.Argument(..., help="Configured screenshot folder to rename recursively."),
+    config_file: Path | None = typer.Option(
+        None, "--config", help="Path to config.toml; defaults to the user config path."
+    ),
+) -> None:
+    """Use the local vision model to rename every indexed screenshot in a folder."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    if not folder.expanduser().is_dir():
+        typer.echo(
+            f"Screenshot folder does not exist or is not a directory: {folder}", err=True
+        )
+        raise typer.Exit(code=1)
+    try:
+        config = load_config(config_file)
+        connection = connect_database(config.database_path)
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        typer.echo(f"Could not prepare local database: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    root = folder.expanduser().resolve()
+    try:
+        rows = connection.execute(
+            "SELECT id, path, ocr_text FROM images WHERE status = 'indexed' "
+            "ORDER BY path COLLATE NOCASE"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    renamed = skipped = failed = 0
+    for row in rows:
+        path = Path(str(row["path"])).expanduser().resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            continue
+        if not path.is_file():
+            skipped += 1
+            continue
+        try:
+            description = describe_screenshot(path, str(row["ocr_text"] or ""), config.vision_model)
+            new_name = unique_filename(filename_from_description(description, path), path)
+            if new_name == path.name:
+                skipped += 1
+                continue
+            rename_indexed_image(
+                config.database_path, int(row["id"]), path, new_name, root
+            )
+            renamed += 1
+        except (FileExistsError, FileNotFoundError, OSError, ValueError, VisionModelError) as exc:
+            failed += 1
+            logger.error("Could not rename screenshot %s: %s", path, exc)
+            if isinstance(exc, VisionModelError):
+                break
+        except sqlite3.Error:
+            failed += 1
+            logger.exception("Could not update the index while renaming %s", path)
+
+    typer.echo(
+        f"Vision rename complete: {renamed} renamed, {skipped} unchanged or unavailable, "
+        f"{failed} error(s)"
+    )
+    if failed:
+        raise typer.Exit(code=2)
 
 
 @app.command()
