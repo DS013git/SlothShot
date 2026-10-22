@@ -8,7 +8,7 @@ Private, offline screenshot search for Windows. Find images by exact OCR text or
 
 You take a screenshot of an error, a chat, a recipe, a bank page. Three weeks later you remember *"that Docker port thing"*, not the file name. SlothShot watches your screenshots folder, reads the text in every image with OCR, and lets you search by **exact words** and by **meaning**. Searching `docker port problem` finds the screenshot that says `address already in use`.
 
-SlothShot automatically gives screenshots in the watched folder concise OCR-based filenames. You can also review or edit a suggestion in search results and rename that image yourself. It renames files in place, and never sorts, moves or uploads them.
+SlothShot suggests descriptive filenames from the text it reads. You review and edit each suggestion, then choose **Rename file** to apply it. It never renames files automatically, and never sorts, moves or uploads them.
 
 Built for the DEV **Hacktoberfest 2026 Open-Source AI Challenge**, weekly theme *"Slow and Steady"*: the more lazy you are, the more it helps.
 
@@ -80,14 +80,14 @@ slothshot ui          # browser UI on http://127.0.0.1:8501
 ```
 
 In the UI sidebar, use **Choose folder** to select the screenshot directory and
-**Save folder** to store it in your local config. The UI starts monitoring that
-folder automatically. New screenshots are indexed and renamed from their OCR
-text. Use **Refresh index + rename all** to rescan the folder and apply names
-again to every indexed image. Search results also include an editable
-suggestion and a **Rename file** action. Extensions are preserved, existing
-files are never overwritten, and the local search index follows each rename.
+**Save folder** to store it in your local config. **Index now** scans the
+selected folder; restart an already-running background watcher to apply the new
+folder to automatic monitoring. Search results include an editable filename
+suggestion based on OCR text; choose **Rename file** to apply the name in place.
+The file extension is preserved, existing files are never overwritten, and the
+search index updates with the new path.
 
-**4. Keep it running while the UI is closed.** The UI starts its own watcher while open. To keep indexing at every login when the UI is closed, install the background watcher:
+**4. Make it lazy.** Start the watcher at every login so new screenshots are indexed on their own:
 
 ```powershell
 .\scripts\install_autostart.ps1 -StartNow
@@ -99,10 +99,10 @@ files are never overwritten, and the local search index follows each rename.
 | --- | --- |
 | `slothshot doctor` | Health check: Python, packages, FTS5, models, watch folder. |
 | `slothshot ocr <image> [--no-preprocess]` | Print the text and per-line confidence for one image, with timing. |
-| `slothshot index <folder> [--keep-filenames]` | OCR and index new or changed images, automatically naming successful screenshots from OCR. Skips unchanged OCR work, handles renames without redoing OCR, and removes entries for deleted files. Use `--keep-filenames` to preserve source names. |
+| `slothshot index <folder>` | OCR and index new or changed images. Skips files already known by SHA-256, handles renames without redoing OCR, removes entries for deleted files. Safe to re-run or interrupt. |
 | `slothshot search "<query>" [--mode keyword\|semantic\|hybrid] [--limit N]` | Search. Default mode is `hybrid`. Prints path, score and a snippet. |
-| `slothshot watch [folder] [--log-file PATH]` | Catch up on anything missed, then index and automatically rename new files until Ctrl+C. |
-| `slothshot ui` | Start the Streamlit interface and automatically watch the configured folder, bound to `127.0.0.1` only. |
+| `slothshot watch [folder] [--log-file PATH]` | Catch up on anything missed, then watch for new files until Ctrl+C. |
+| `slothshot ui` | Start the Streamlit interface, bound to `127.0.0.1` only. |
 
 Every command accepts `--config path\to\config.toml`.
 
@@ -151,7 +151,7 @@ Windows environment variables are expanded, and relative paths resolve next to t
 
 - **No cloud, no telemetry, no accounts.** The only network use is the one-time download of the embedding model on first run. A startup log line confirms whether the model is already cached locally.
 - **The UI binds to `127.0.0.1`.** Streamlit usage statistics are disabled.
-- **Local file changes only.** SlothShot automatically renames screenshots in the watched folder based on OCR text. It renames files in place, never overwrites existing files, and does not sort, move, copy or upload them.
+- **You control file changes.** SlothShot never renames files automatically. It only renames a screenshot in place after you review its suggested name and choose **Rename file**; it does not sort, move, copy or upload files.
 - **The database is not encrypted.** It stores the OCR text of every screenshot in plain text in `%LOCALAPPDATA%\SlothShot\slothshot.sqlite3`. That includes anything visible in an image, such as one-time passwords, account numbers or private messages. Anyone who can read your user profile can read that file. Treat it like the screenshots themselves, and rely on Windows disk encryption (BitLocker) if you need protection at rest.
 - **This repository contains no real screenshots.** All test and benchmark images are synthetic, generated by `scripts/make_sample_data.py`. Real-data folders and private evaluation files are in `.gitignore`.
 

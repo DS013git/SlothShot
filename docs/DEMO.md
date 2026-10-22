@@ -29,7 +29,7 @@ model_cache = '%LOCALAPPDATA%\SlothShot\models'
 slothshot doctor --config data\demo\config.toml
 ```
 
-Check that `doctor` says `Embedding model cache: ready` and `SQLite FTS5: available`. If the model is not cached yet, run `slothshot index data\demo\shots --keep-filenames --config data\demo\config.toml` once while online, then delete `data\demo\appdata` so the demo indexes live.
+Check that `doctor` says `Embedding model cache: ready` and `SQLite FTS5: available`. If the model is not cached yet, run `slothshot index data\demo\shots --config data\demo\config.toml` once while online, then delete `data\demo\appdata` so the demo indexes live.
 
 Keep one image back for the live "new screenshot" moment: `data\demo\source\code_003.png` (a Python "database is locked" snippet).
 
@@ -40,12 +40,12 @@ Open three windows side by side: a terminal, File Explorer at `data\demo\shots`,
 | Time | What you do | What you say |
 | --- | --- | --- |
 | **0:00** | Show the Windows Wi-Fi flyout. Turn **Wi-Fi off** and let the viewer see the "no internet" icon. Optionally run `ping 1.1.1.1` to show it fails. | "First, I'm switching off my internet. Everything from here on runs on this laptop: an Intel i3, no GPU, 8 GB of RAM." |
-| **0:15** | `slothshot index data\demo\shots --keep-filenames --config data\demo\config.toml` | "SlothShot reads every screenshot with an open-source OCR model and stores the text locally. In normal use it gives new screenshots descriptive names from their content." (Wait about 20 s. The log shows each image being read. Optionally glance at RAM in Task Manager.) |
+| **0:15** | `slothshot index data\demo\shots --config data\demo\config.toml` | "SlothShot reads every screenshot with an open-source OCR model and stores the text locally. It never changes filenames automatically; I can review an OCR-based suggestion in the UI." (Wait about 20 s. The log shows each image being read. Optionally glance at RAM in Task Manager.) |
 | **0:40** | `slothshot search "address already in use" --mode keyword --config data\demo\config.toml` | "Exact words work. This finds the terminal screenshots." (Expect `terminal_000.png` and `terminal_006.png`.) |
 | **0:55** | `slothshot search "docker port problem" --config data\demo\config.toml` | "Now by meaning. I never typed those words, but it finds the Docker error." (Expect `terminal_000.png` first.) |
 | **1:10** | `slothshot search "friend sent recipe ingredients" --mode keyword --config data\demo\config.toml` then the same with `--mode hybrid` | "Keyword search finds nothing, because those words are not on the screen. The hybrid search understands what I mean." (Keyword prints `No matching screenshots found.` Hybrid returns `chat_007.png` first. This is the key moment.) |
 | **1:30** | Start the UI: `slothshot ui --config data\demo\config.toml`. In the browser search `bank one time password code`. | "There's a local UI too. And yes, this finds the one-time password screenshot. That is exactly why this must never leave my computer." (Expect `tricky_otp_message.png` first.) |
-| **1:45** | Drag `data\demo\source\code_003.png` into `data\demo\shots` in Explorer, wait about 6 to 10 s, search `database is locked` in the UI. | "Fully lazy mode: I drop a new screenshot in and SlothShot indexes and names it automatically. A few seconds later it's searchable." |
+| **1:45** | In a second terminal start `slothshot watch --config data\demo\config.toml`. Drag `data\demo\source\code_003.png` into `data\demo\shots` in Explorer, wait about 6 to 10 s, search `database is locked` in the UI. | "Fully lazy mode: I drop a new screenshot in and a few seconds later it's searchable. No clicking. At login this starts by itself." |
 | **1:58** | Show the Wi-Fi icon still off. | "Still offline. Open-source models, runs on a cheap laptop, costs nothing, and my screenshots never leave this machine." |
 
 ## If something goes wrong
@@ -55,7 +55,7 @@ Open three windows side by side: a terminal, File Explorer at `data\demo\shots`,
 - **The UI says there is nothing indexed.** Pass the same `--config data\demo\config.toml` to `slothshot ui`.
 - **The UI will not start or shows an old page.** An earlier `slothshot ui` may still be running on port 8501. Press Ctrl+C in that terminal, then start it again.
 - **Model download attempted while offline.** The model was not cached. Turn Wi-Fi on, run the Prepare step, and try again.
-- **Dropped file does not appear.** Make sure the UI sidebar says new screenshots are being watched. If you run the watcher separately, use `slothshot watch --config data\demo\config.toml` and look for `Indexed screenshot:` in its output.
+- **Dropped file does not appear.** Make sure `slothshot watch` is running against `data\demo\config.toml`. Look for `Indexed screenshot:` in its output.
 
 ## Clean up
 

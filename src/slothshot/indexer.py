@@ -18,7 +18,6 @@ from slothshot.embed import (
     reuse_embeddings_for_hash,
     save_image_embeddings,
 )
-from slothshot.naming import rename_indexed_image, suggest_filename
 
 logger = logging.getLogger("slothshot.indexer")
 SUPPORTED_IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
@@ -42,7 +41,6 @@ class IndexSummary:
     skipped: int = 0
     failed: int = 0
     removed: int = 0
-    renamed: int = 0
 
 
 def sha256_file(path: Path) -> str:
@@ -199,8 +197,6 @@ def scan_folder(
     connection: sqlite3.Connection,
     reader: ImageReader,
     embedder: EmbeddingModel | None = None,
-    *,
-    auto_rename: bool = False,
 ) -> IndexSummary:
     """Index supported images under ``folder`` and remove stale entries.
 
@@ -214,39 +210,24 @@ def scan_folder(
     paths = _candidate_images(root)
     logger.info("Found %d supported images under %s", len(paths), root)
 
-    counts = {"indexed": 0, "reused": 0, "skipped": 0, "failed": 0, "renamed": 0}
+    counts = {"indexed": 0, "reused": 0, "skipped": 0, "failed": 0}
     discovered = {str(path.resolve()) for path in paths}
     for path in paths:
         outcome = index_image(connection, path, reader)
         counts[outcome] += 1
-        if outcome != "failed":
+        if embedder is not None and outcome != "failed":
             row = image_by_path(connection, path)
             if row is not None and row["status"] == "indexed":
-                image_id = int(row["id"])
-                if embedder is not None:
-                    if outcome == "reused":
-                        reuse_embeddings_for_hash(
-                            connection, image_id=image_id, sha256=str(row["sha256"])
-                        )
-                    save_image_embeddings(
-                        connection,
-                        image_id=image_id,
-                        text=str(row["ocr_text"]),
-                        model=embedder,
+                if outcome == "reused":
+                    reuse_embeddings_for_hash(
+                        connection, image_id=int(row["id"]), sha256=str(row["sha256"])
                     )
-
-                if auto_rename:
-                    suggested = suggest_filename(str(row["ocr_text"]), path)
-                    renamed_path = rename_indexed_image(
-                        connection, image_id, path, suggested, root
-                    )
-                    if renamed_path != path:
-                        discovered.discard(str(path.resolve()))
-                        discovered.add(str(renamed_path.resolve()))
-                        counts["renamed"] += 1
-                        logger.info(
-                            "Renamed screenshot from %s to %s", path.name, renamed_path.name
-                        )
+                save_image_embeddings(
+                    connection,
+                    image_id=int(row["id"]),
+                    text=str(row["ocr_text"]),
+                    model=embedder,
+                )
 
     # Limit cleanup to descendants of this root; indexing another directory
     # must never remove records owned by a different scan.
@@ -270,7 +251,6 @@ def scan_folder(
         skipped=counts["skipped"],
         failed=counts["failed"],
         removed=removed,
-        renamed=counts["renamed"],
     )
     logger.info("Index scan finished: %s", summary)
     return summary

@@ -171,11 +171,6 @@ def ocr(
 @app.command()
 def index(
     folder: Path = typer.Argument(..., help="Screenshot folder to scan recursively."),
-    keep_filenames: bool = typer.Option(
-        False,
-        "--keep-filenames",
-        help="Index screenshots without automatically renaming their files.",
-    ),
     config_file: Path | None = typer.Option(
         None, "--config", help="Path to config.toml; defaults to the user config path."
     ),
@@ -190,13 +185,7 @@ def index(
         raise typer.Exit(code=1) from exc
 
     try:
-        summary = scan_folder(
-            folder,
-            connection,
-            OCRReader(config),
-            EmbeddingModel(config),
-            auto_rename=not keep_filenames,
-        )
+        summary = scan_folder(folder, connection, OCRReader(config), EmbeddingModel(config))
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         typer.echo(f"Index scan failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -206,8 +195,7 @@ def index(
     typer.echo(
         "Index complete: "
         f"{summary.found} found, {summary.indexed} indexed, {summary.reused} reused, "
-        f"{summary.skipped} unchanged, {summary.renamed} renamed, "
-        f"{summary.failed} failed, {summary.removed} removed"
+        f"{summary.skipped} unchanged, {summary.failed} failed, {summary.removed} removed"
     )
     if summary.failed:
         raise typer.Exit(code=1)
