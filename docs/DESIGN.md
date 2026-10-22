@@ -123,7 +123,9 @@ means events arriving during catch-up stay queued behind the scan and are then
 processed in order. Catch-up and live file events use the same size-and-mtime
 stability check before OCR. The watcher filters temporary suffixes and common
 editor lock files, coalesces duplicate create/modify notifications briefly,
-and handles file or directory moves and deletions.
+and handles file or directory moves and deletions. New or changed images are
+renamed in place from their OCR text after indexing; unchanged files keep their
+names until the user requests a full refresh.
 
 Only the worker thread opens the database connection used for indexing; the
 Streamlit UI and command-line search can keep their own reader connections.
@@ -137,34 +139,31 @@ has not settled before shutdown is picked up by the next catch-up scan.
 The UI's search and display operations open the existing SQLite file with
 `mode=ro` and enable SQLite's `query_only` setting. Search uses short-lived
 read-only connections, so it works whether or not the background watcher is
-running. A reviewed **Rename file** action opens a separate write connection,
-renames one image in place, updates its indexed path in a SQLite transaction,
-and never overwrites an existing file. The **Index now** button starts the existing CLI index command as a
-separate child process and records its output in the local app-data folder;
-it does not turn the UI's connection into a writer or hold the page while OCR
-and embedding run.
+running. When the UI starts, it starts one watcher for the configured folder;
+when the folder changes, that watcher switches to the new folder. A reviewed
+**Rename file** action opens a separate write connection, renames one image in
+place, updates its indexed path in a SQLite transaction, and never overwrites
+an existing file. **Refresh index + rename all** queues a full scan on the
+watcher's single database worker, which reapplies names to every indexed image.
 
 Search results use three columns of cards with thumbnails, snippets, scores,
 and local open-image and open-folder actions. Snippet text is HTML-escaped
 before FTS highlight markers become `<mark>` elements. Streamlit's copyable
 code block provides a browser-side copy button without sending paths to a
 clipboard service. Thumbnails are reduced to a bounded size and cached in
-memory. OCR text can suggest a concise app/site and page name; the user reviews
-or edits it before choosing to rename that image.
+memory. OCR text suggests a concise app/site and page name; the user can still
+edit a suggestion before manually renaming a result.
 
 The sidebar reads totals and the last successful index time from SQLite. Its
 pending count is a cached estimate of supported image paths not yet recorded
-in the index; after an Index now run, use **Refresh stats** to clear the short
-cache. The UI logs whether the configured embedding model is already present
+in the index; a completed refresh clears its short cache. The UI logs whether the configured embedding model is already present
 in the local cache, and binds its server to `127.0.0.1` with usage statistics
 disabled.
 
 The **Watch folder** controls let a user choose a local directory with the
 native folder picker or enter a path directly. Saving updates only
 `paths.watch_folder` in the active TOML config, preserving other settings and
-the rest of the config file. **Index now** can scan the selected folder
-immediately; a background watcher that was already running must be restarted
-to observe the new folder.
+the rest of the config file. The UI-owned watcher switches folders on rerun.
 
 ## Phase 7: synthetic evaluation and resource measurements
 

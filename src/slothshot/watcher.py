@@ -34,6 +34,7 @@ from slothshot.indexer import (
     ImageReader,
     index_image,
 )
+from slothshot.naming import rename_indexed_image, suggest_filename
 from slothshot.ocr import OCRReader
 
 logger = logging.getLogger("slothshot.watcher")
@@ -231,6 +232,8 @@ class ScreenshotWatcher:
         self.tasks: queue.Queue[WatchTask | None] = queue.Queue()
         self.stop_event = threading.Event()
         self.catchup_complete = threading.Event()
+        self._catchup_lock = threading.Lock()
+        self._pending_catchups = 0
         self.worker_ready = threading.Event()
         self.worker_error: BaseException | None = None
         self.observer: BaseObserver | None = None
@@ -254,6 +257,9 @@ class ScreenshotWatcher:
 
         # The catch-up task goes in first. Start watching before the worker so
         # filesystem events queue behind that scan instead of slipping through.
+        with self._catchup_lock:
+            self._pending_catchups += 1
+            self.catchup_complete.clear()
         self.tasks.put(WatchTask("catchup", self.root))
         self.observer.start()
         self.worker = threading.Thread(
@@ -269,6 +275,15 @@ class ScreenshotWatcher:
             raise RuntimeError(f"Could not start the index worker: {self.worker_error}")
         self._started = True
         logger.info("Watching %s for screenshot changes", self.root)
+
+    def refresh(self) -> None:
+        """Queue a full catch-up scan that also reapplies OCR-based filenames."""
+        if not self._started:
+            raise RuntimeError("The screenshot watcher is not running.")
+        with self._catchup_lock:
+            self._pending_catchups += 1
+            self.catchup_complete.clear()
+        self.tasks.put(WatchTask("refresh", self.root))
 
     def run(self) -> None:
         """Run until Ctrl+C and then drain the queue and stop all threads."""
@@ -322,11 +337,20 @@ class ScreenshotWatcher:
 
     def _process_task(self, connection: sqlite3.Connection, task: WatchTask) -> None:
         """Run one queued scan, upsert, move, or delete operation."""
-        if task.action == "catchup":
+        if task.action in {"catchup", "refresh"}:
             logger.info("Scanning for screenshots missed while SlothShot was stopped")
             assert self.reader is not None and self.embedder is not None
-            self._catchup_scan(connection, task.path)
-            self.catchup_complete.set()
+            try:
+                self._catchup_scan(
+                    connection,
+                    task.path,
+                    rename_existing=task.action == "refresh",
+                )
+            finally:
+                with self._catchup_lock:
+                    self._pending_catchups = max(0, self._pending_catchups - 1)
+                    if self._pending_catchups == 0:
+                        self.catchup_complete.set()
             return
         if task.action == "upsert":
             self._process_upsert(connection, task.path)
@@ -347,19 +371,25 @@ class ScreenshotWatcher:
         else:
             logger.warning("Ignoring unknown watcher task: %s", task.action)
 
-    def _process_upsert(self, connection: sqlite3.Connection, path: Path) -> None:
+    def _process_upsert(
+        self,
+        connection: sqlite3.Connection,
+        path: Path,
+        *,
+        rename_existing: bool = False,
+    ) -> Path | None:
         if not is_supported_image(path):
-            return
+            return None
         if not self.stability_waiter(path, stop_event=self.stop_event):
             logger.info("Skipped file that did not become stable: %s", path)
-            return
+            return None
         assert self.reader is not None and self.embedder is not None
         outcome = index_image(connection, path, self.reader)
         if outcome == "failed":
-            return
+            return None
         row = image_by_path(connection, path)
         if row is None or row["status"] != "indexed":
-            return
+            return None
         if outcome == "reused":
             reuse_embeddings_for_hash(
                 connection, image_id=int(row["id"]), sha256=str(row["sha256"])
@@ -370,7 +400,19 @@ class ScreenshotWatcher:
             text=str(row["ocr_text"]),
             model=self.embedder,
         )
-        logger.info("Indexed screenshot: %s", path)
+        renamed_path = path
+        if outcome != "skipped" or rename_existing:
+            renamed_path = rename_indexed_image(
+                connection,
+                int(row["id"]),
+                path,
+                suggest_filename(str(row["ocr_text"]), path),
+                self.root,
+            )
+        if renamed_path != path:
+            logger.info("Automatically renamed screenshot: %s", renamed_path)
+        logger.info("Indexed screenshot: %s", renamed_path)
+        return renamed_path
 
     def _scan_tree(self, connection: sqlite3.Connection, folder: Path) -> None:
         if not folder.is_dir():
@@ -379,7 +421,9 @@ class ScreenshotWatcher:
             if path.is_file() and is_supported_image(path):
                 self._process_upsert(connection, path)
 
-    def _catchup_scan(self, connection: sqlite3.Connection, folder: Path) -> None:
+    def _catchup_scan(
+        self, connection: sqlite3.Connection, folder: Path, *, rename_existing: bool = False
+    ) -> None:
         """Wait for current files to settle, index them, and prune stale rows."""
         paths = sorted(
             (path for path in folder.rglob("*") if path.is_file() and is_supported_image(path)),
@@ -388,7 +432,12 @@ class ScreenshotWatcher:
         discovered = {str(path.resolve()) for path in paths}
         logger.info("Catch-up found %d supported images under %s", len(paths), folder)
         for path in paths:
-            self._process_upsert(connection, path)
+            indexed_path = self._process_upsert(
+                connection, path, rename_existing=rename_existing
+            )
+            if indexed_path is not None and indexed_path.resolve() != path.resolve():
+                discovered.discard(str(path.resolve()))
+                discovered.add(str(indexed_path.resolve()))
 
         root = str(folder.resolve()).rstrip("\\/")
         prefix = _escape_like(root + _separator(root)) + "%"

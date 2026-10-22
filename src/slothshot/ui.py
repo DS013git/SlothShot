@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import html
 import logging
 import os
@@ -9,7 +10,7 @@ import re
 import sqlite3
 import subprocess
 import sys
-import unicodedata
+import threading
 import webbrowser
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -24,10 +25,15 @@ from slothshot.config import AppConfig, default_config_path, load_config, save_w
 from slothshot.db import connect_database
 from slothshot.embed import EmbeddingModel, embedding_model_cached
 from slothshot.indexer import SUPPORTED_IMAGE_SUFFIXES
+from slothshot.naming import rename_indexed_image as rename_with_connection
+from slothshot.naming import suggest_filename
 from slothshot.search import SearchResult, search_hybrid, search_keyword, search_semantic
+from slothshot.watcher import ScreenshotWatcher
 
 logger = logging.getLogger("slothshot.ui")
 TEMPORARY_SUFFIXES = {".crdownload", ".part", ".partial", ".temp", ".tmp"}
+_watcher_lock = threading.Lock()
+_app_watcher: ScreenshotWatcher | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +55,44 @@ def _readonly_connection(database_path: Path) -> sqlite3.Connection:
     connection.execute("PRAGMA query_only = ON")
     connection.execute("PRAGMA busy_timeout = 5000")
     return connection
+
+
+def _ensure_app_watcher(config: AppConfig) -> None:
+    """Keep one watcher active for the UI's configured screenshot folder."""
+    global _app_watcher
+    root = config.watch_folder.expanduser().resolve()
+    with _watcher_lock:
+        if _app_watcher is not None and _app_watcher.root == root:
+            observer = _app_watcher.observer
+            if observer is not None and observer.is_alive():
+                return
+        if _app_watcher is not None:
+            _app_watcher.stop()
+            _app_watcher = None
+        watcher = ScreenshotWatcher(config)
+        watcher.start()
+        _app_watcher = watcher
+
+
+def _stop_app_watcher() -> None:
+    """Drain and stop the UI-owned watcher when Streamlit shuts down."""
+    global _app_watcher
+    with _watcher_lock:
+        if _app_watcher is not None:
+            _app_watcher.stop()
+            _app_watcher = None
+
+
+def _app_watcher_is_running() -> bool:
+    """Return whether the UI-owned filesystem observer is alive."""
+    return bool(
+        _app_watcher is not None
+        and _app_watcher.observer is not None
+        and _app_watcher.observer.is_alive()
+    )
+
+
+atexit.register(_stop_app_watcher)
 
 
 @st.cache_data(ttl=3, max_entries=4, show_spinner=False)
@@ -185,7 +229,7 @@ def _save_watch_folder(config_path: Path | None) -> None:
     st.session_state["watch_folder_input"] = str(selected.resolve())
     st.session_state["watch_folder_feedback"] = (
         "success",
-        f"Saved to {saved_path}. Restart the background watcher to monitor this folder.",
+        f"Saved to {saved_path}. Automatic monitoring will switch to this folder.",
     )
     load_index_snapshot.clear()
     count_pending_files.clear()
@@ -265,128 +309,6 @@ def _open_folder(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path.parent)])
 
 
-_FILENAME_SKIP_WORDS = {
-    "and", "are", "for", "from", "http", "https", "into", "the", "this", "that",
-    "with", "www", "com", "org", "net", "home", "file", "edit", "view", "help",
-    "chrome", "firefox", "safari", "google", "website", "browser", "bookmarks", "new", "tab",
-}
-_DATE_OR_TIME_LINE = re.compile(
-    r"(?i)(?:\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b|"
-    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b)"
-)
-
-
-def suggest_filename(ocr_text: str, current_path: Path) -> str:
-    """Summarize recognizable website/app context into a concise filename."""
-    text = unicodedata.normalize("NFKC", ocr_text)
-    folded = text.casefold()
-
-    browser = next(
-        (
-            name
-            for marker, name in (
-                ("chrome", "Chrome"),
-                ("firefox", "Firefox"),
-                ("microsoft edge", "Edge"),
-                ("edge://", "Edge"),
-                ("safari", "Safari"),
-            )
-            if marker in folded
-        ),
-        None,
-    )
-
-    domain_match = re.search(
-        r"(?i)(?:https?://)?(?:www\.)?([a-z0-9-]+\.)+(com|net|org|io|app|dev|ai|co|uk|me|xyz)(?:/[^\s]*)?",
-        text,
-    )
-    known_sites = (
-        "Google Docs", "Google Drive", "Stack Overflow", "GitHub", "Render", "Figma", "Notion",
-        "YouTube", "Vercel", "Netlify", "Slack", "Discord", "Reddit", "ChatGPT", "Claude",
-        "Trello", "Linear", "Jira", "Canva", "Wikipedia",
-    )
-    site = next((name for name in known_sites if name.casefold() in folded), None)
-    if not site and domain_match:
-        host = domain_match.group(0).split("/")[0].casefold()
-        host = re.sub(r"^https?://", "", host).removeprefix("www.")
-        domain_site = host.split(".")[0]
-        if domain_site not in {"google", "bing", "yahoo", "duckduckgo", "microsoft"}:
-            site = domain_site
-
-    page_context = next(
-        (
-            label
-            for term, label in (
-                ("dashboard", "Dashboard"),
-                ("deploy", "Deployments"),
-                ("project", "Projects"),
-                ("settings", "Settings"),
-                ("sign in", "Sign In"),
-                ("log in", "Sign In"),
-                ("documentation", "Documentation"),
-                ("docs", "Documentation"),
-                ("search results", "Search Results"),
-                ("error", "Error Message"),
-            )
-            if term in folded
-        ),
-        None,
-    )
-
-    title = ""
-    if site:
-        summary = site[:1].upper() + site[1:]
-        if page_context:
-            summary += f" {page_context}"
-        elif "website" in folded or domain_match:
-            summary += " Website"
-        if browser:
-            summary += f" in {browser}"
-        title = f"{summary}{current_path.suffix.lower()}"
-    elif browser:
-        summary = page_context or ("Website" if domain_match else None)
-        if summary:
-            title = f"{summary} in {browser}{current_path.suffix.lower()}"
-    selected: list[str] = []
-    seen: set[str] = set()
-    for raw_line in ocr_text.splitlines():
-        line = re.sub(r"\s+", " ", raw_line).strip(" \t|_—-:;,.•")
-        if not line or _DATE_OR_TIME_LINE.search(line):
-            continue
-        words = re.findall(r"[^\W_]+", line, flags=re.UNICODE)
-        meaningful = [
-            word for word in words
-            if len(word) >= 3 and not word.isdigit() and word.casefold() not in _FILENAME_SKIP_WORDS
-        ]
-        if not meaningful or len(meaningful) > 14:
-            continue
-        for word in meaningful:
-            key = word.casefold()
-            if key in seen:
-                continue
-            selected.append(word)
-            seen.add(key)
-            if len(selected) == 7:
-                break
-        if len(selected) >= 5:
-            break
-
-    if not title and selected:
-        title = " ".join(word[:1].upper() + word[1:] for word in selected)
-        title += current_path.suffix.lower()
-    if not title:
-        title = current_path.name
-
-    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", Path(title).stem)
-    stem = re.sub(r"\s+", " ", stem).strip(" .")[:90].rstrip(" .")
-    if not stem or stem.upper() in {
-        "CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
-        *(f"LPT{i}" for i in range(1, 10)),
-    }:
-        stem = "Screenshot"
-    return f"{stem}{current_path.suffix.lower()}"
-
-
 def _ocr_text_for_image(database_path: Path, image_id: int) -> str:
     """Read the indexed OCR text for one image without opening a write handle."""
     if not database_path.is_file():
@@ -402,65 +324,16 @@ def _ocr_text_for_image(database_path: Path, image_id: int) -> str:
 def rename_indexed_image(
     database_path: Path, image_id: int, old_path: Path, new_name: str, watch_folder: Path
 ) -> Path:
-    """Rename one indexed image in place and keep its SQLite/FTS path synchronized."""
-    root = watch_folder.expanduser().resolve()
-    source = old_path.expanduser().resolve()
-    try:
-        source.relative_to(root)
-    except ValueError as exc:
-        message = "Only screenshots inside the configured watch folder can be renamed."
-        raise ValueError(message) from exc
-    if not source.is_file():
-        raise FileNotFoundError(f"Screenshot no longer exists: {source}")
-
-    candidate = Path(new_name.strip())
-    if (
-        candidate.name != new_name.strip()
-        or candidate.suffix.casefold() != source.suffix.casefold()
-    ):
-        raise ValueError("Enter a filename only and keep the original file extension.")
-    stem = candidate.stem.strip(" .")
-    if not stem or stem in {".", ".."}:
-        raise ValueError("Enter a valid filename.")
-    if any(char in stem for char in '<>:"/\\|?*') or any(ord(char) < 32 for char in stem):
-        raise ValueError("The filename contains characters that Windows does not allow.")
-    reserved_names = {
-        "CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
-        *(f"LPT{i}" for i in range(1, 10)),
-    }
-    if stem.upper() in reserved_names:
-        raise ValueError("That filename is reserved by Windows.")
-    destination = source.with_name(f"{stem}{source.suffix}")
-    if destination == source:
-        raise ValueError("Choose a different filename.")
-    if destination.exists():
-        raise FileExistsError(f"A file named {destination.name} already exists.")
+    """Rename one file with a short-lived writable connection for the UI action."""
     if not database_path.is_file():
         raise FileNotFoundError("The SlothShot index database is unavailable.")
-
     connection = connect_database(database_path)
-    moved = False
     try:
-        connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
-        if row is None or Path(str(row["path"])).resolve() != source:
-            raise ValueError("The indexed path changed. Refresh search results and try again.")
-        source.rename(destination)
-        moved = True
-        cursor = connection.execute(
-            "UPDATE images SET path = ? WHERE id = ?", (str(destination), image_id)
+        return rename_with_connection(
+            connection, image_id, old_path, new_name, watch_folder
         )
-        if cursor.rowcount != 1:
-            raise RuntimeError("Could not update the indexed screenshot path.")
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        if moved and destination.exists() and not source.exists():
-            destination.rename(source)
-        raise
     finally:
         connection.close()
-    return destination
 
 
 def _start_index_process(config: AppConfig, config_path: Path | None) -> subprocess.Popen[bytes]:
@@ -504,8 +377,31 @@ def _format_timestamp(value: str | None) -> str:
     return timestamp.strftime("%Y-%m-%d %H:%M")
 
 
+@st.fragment(run_every="1s")
+def _render_watcher_status() -> None:
+    """Refresh watcher and full-scan status without rerunning search results."""
+    watcher = _app_watcher
+    if watcher is None or watcher.observer is None or not watcher.observer.is_alive():
+        st.error("Automatic screenshot watching is not running.")
+        return
+
+    if st.session_state.get("index_refresh_requested"):
+        if watcher.catchup_complete.is_set():
+            st.session_state.pop("index_refresh_requested", None)
+            load_index_snapshot.clear()
+            count_pending_files.clear()
+            st.session_state["index_refresh_complete"] = True
+            st.rerun(scope="app")
+        else:
+            st.info("Refreshing the index and applying names to screenshots…")
+    elif not watcher.catchup_complete.is_set():
+        st.info("Starting the initial screenshot scan…")
+    else:
+        st.caption("New screenshots are indexed and renamed automatically.")
+
+
 def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapshot:
-    """Show index status and launch indexing outside the Streamlit process."""
+    """Show index metrics, refresh controls, and watcher status."""
     _render_watch_folder(config, config_path)
     st.sidebar.header("Local index")
     try:
@@ -533,31 +429,30 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
         logger.info("Embedding model %s is not cached locally", config.embedding_model)
         st.sidebar.caption("Semantic model: download needed for first semantic search")
 
-    process = st.session_state.get("index_process")
-    if process is not None:
-        return_code = process.poll()
-        if return_code is None:
-            st.sidebar.info("Indexing is running in the background.")
-        elif return_code == 0:
-            st.sidebar.success("Indexing finished. Refresh to update the counts.")
-        else:
-            st.sidebar.error(
-                f"Indexing exited with code {return_code}. See {config.data_dir / 'ui-index.log'}."
-            )
-
-    index_disabled = process is not None and process.poll() is None
-    if st.sidebar.button("Index now", disabled=index_disabled, use_container_width=True):
+    if st.sidebar.button(
+        "Refresh index + rename all",
+        disabled=not _app_watcher_is_running(),
+        use_container_width=True,
+        help=(
+            "Scan the selected folder and reapply OCR-based filenames "
+            "to every indexed screenshot."
+        ),
+    ):
         try:
-            st.session_state["index_process"] = _start_index_process(config, config_path)
-            st.sidebar.success("Indexing started in the background.")
-        except OSError as exc:
-            st.sidebar.error(f"Could not start indexing: {exc}")
+            if not _app_watcher_is_running() or _app_watcher is None:
+                raise RuntimeError("The screenshot watcher is not running.")
+            _app_watcher.refresh()
+            st.session_state["index_refresh_requested"] = True
+        except (OSError, RuntimeError) as exc:
+            st.sidebar.error(f"Could not refresh indexing: {exc}")
+
+    with st.sidebar:
+        _render_watcher_status()
 
     if st.sidebar.button("Refresh stats", use_container_width=True):
         load_index_snapshot.clear()
         count_pending_files.clear()
         st.rerun()
-    st.sidebar.caption(f"Watching: {config.watch_folder}")
     return snapshot
 
 
@@ -598,11 +493,15 @@ def _render_result(result: SearchResult, slot: Any, config: AppConfig) -> None:
             except (OSError, sqlite3.Error) as exc:
                 suggested_name = path.name
                 st.caption(f"Could not read OCR text for a filename suggestion: {exc}")
+            name_key = f"suggested-name-{result.image_id}"
+            override_key = f"renamed-name-{result.image_id}"
+            if override_key in st.session_state:
+                st.session_state[name_key] = st.session_state.pop(override_key)
             with st.form(f"rename-image-{result.image_id}"):
                 st.text_input(
                     "Suggested filename",
                     value=suggested_name,
-                    key=f"suggested-name-{result.image_id}",
+                    key=name_key,
                     help=(
                         "Edit the OCR-based suggestion before renaming. "
                         "The file extension is kept."
@@ -615,11 +514,11 @@ def _render_result(result: SearchResult, slot: Any, config: AppConfig) -> None:
                         config.database_path,
                         result.image_id,
                         path,
-                        st.session_state[f"suggested-name-{result.image_id}"],
+                        st.session_state[name_key],
                         config.watch_folder,
                     )
                     load_index_snapshot.clear()
-                    st.session_state[f"suggested-name-{result.image_id}"] = new_path.name
+                    st.session_state[override_key] = new_path.name
                     st.session_state["search_results"] = [
                         replace(item, path=str(new_path))
                         if item.image_id == result.image_id
@@ -649,6 +548,13 @@ def run_app() -> None:
     rename_feedback = st.session_state.pop("rename_feedback", None)
     if rename_feedback:
         st.success(rename_feedback)
+    if st.session_state.pop("index_refresh_complete", False):
+        st.success("Refresh complete. Existing screenshots were checked and renamed.")
+
+    try:
+        _ensure_app_watcher(config)
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        st.sidebar.error(f"Automatic watching could not start: {exc}")
 
     snapshot = _render_sidebar(config, config_path)
     with st.form("screenshot-search", clear_on_submit=False):
@@ -674,7 +580,8 @@ def run_app() -> None:
         st.error(f"Search failed: {search_error}")
     elif snapshot.total == 0 and not st.session_state.get("search_query"):
         st.info(
-            "No screenshots are indexed yet. Use **Index now** in the sidebar, or run "
+            "No screenshots are indexed yet. Use **Refresh index + rename all** in the sidebar, "
+            "or run "
             "`slothshot index <your screenshots folder>` in PowerShell."
         )
     elif st.session_state.get("search_query"):
