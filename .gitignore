@@ -21,6 +21,9 @@ real-data/
 private_eval*.yml
 private_eval*.yaml
 
+# Runtime logs
+*.log
+
 # Editor and operating-system files
 .vscode/
 .idea/
