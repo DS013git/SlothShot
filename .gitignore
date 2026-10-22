@@ -15,6 +15,13 @@ dist/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal
 data/
 screenshots/
 real-data/

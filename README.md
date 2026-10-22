@@ -2,8 +2,9 @@
 
 **A lazy librarian for your screenshots. It reads them, remembers them, and finds them by the words you remember or by what they were about. All on your own computer, with the Wi-Fi off.**
 
-<!-- TODO: replace with a real recording. Script: docs/DEMO.md -->
-> 📽️ *Demo GIF placeholder. See [`docs/DEMO.md`](docs/DEMO.md) for the 2-minute script to record it.*
+Private, offline screenshot search for Windows. Find images by exact OCR text or semantic meaning with local OCR and embeddings.
+
+🎬 **Demo walkthrough and recording script:** [`docs/DEMO.md`](docs/DEMO.md).
 
 You take a screenshot of an error, a chat, a recipe, a bank page. Three weeks later you remember *"that Docker port thing"*, not the file name. SlothShot watches your screenshots folder, reads the text in every image with OCR, and lets you search by **exact words** and by **meaning**. Searching `docker port problem` finds the screenshot that says `address already in use`.
 
@@ -48,7 +49,7 @@ One SQLite file holds everything. The UI only reads that file, so search works w
 Requires **Windows 10/11** and **Python 3.10 or 3.11**.
 
 ```powershell
-git clone <your-fork-url> slothshot
+git clone https://github.com/DS013git/SlothShot.git slothshot
 cd slothshot
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
