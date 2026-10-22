@@ -156,6 +156,13 @@ cache. The UI logs whether the configured embedding model is already present
 in the local cache, and binds its server to `127.0.0.1` with usage statistics
 disabled.
 
+The **Watch folder** controls let a user choose a local directory with the
+native folder picker or enter a path directly. Saving updates only
+`paths.watch_folder` in the active TOML config, preserving other settings and
+the rest of the config file. **Index now** can scan the selected folder
+immediately; a background watcher that was already running must be restarted
+to observe the new folder.
+
 ## Phase 7: synthetic evaluation and resource measurements
 
 `make_sample_data.py` produces 100 or more screenshot-like PNGs with terminal,

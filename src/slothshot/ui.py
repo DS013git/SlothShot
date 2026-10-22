@@ -19,7 +19,7 @@ from typing import Any
 import streamlit as st
 from PIL import Image, UnidentifiedImageError
 
-from slothshot.config import AppConfig, load_config
+from slothshot.config import AppConfig, default_config_path, load_config, save_watch_folder
 from slothshot.embed import EmbeddingModel, embedding_model_cached
 from slothshot.indexer import SUPPORTED_IMAGE_SUFFIXES
 from slothshot.search import SearchResult, search_hybrid, search_keyword, search_semantic
@@ -134,6 +134,99 @@ def _config_from_environment() -> tuple[AppConfig, Path | None]:
     return load_config(path), path
 
 
+def _browse_watch_folder() -> None:
+    """Open the local native folder picker and fill the watch-folder input."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        current_value = st.session_state.get("watch_folder_input", "")
+        current_folder = Path(current_value).expanduser() if current_value else Path.home()
+        initial_folder = current_folder if current_folder.is_dir() else Path.home()
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        try:
+            selected = filedialog.askdirectory(
+                parent=root,
+                initialdir=str(initial_folder),
+                title="Choose the screenshot folder to watch",
+            )
+        finally:
+            root.destroy()
+    except Exception as exc:
+        logger.exception("Could not open the screenshot folder picker")
+        st.session_state["watch_folder_feedback"] = (
+            "error",
+            f"Folder picker could not open: {exc}",
+        )
+        return
+
+    if selected:
+        st.session_state["watch_folder_input"] = selected
+        st.session_state.pop("watch_folder_feedback", None)
+
+
+def _save_watch_folder(config_path: Path | None) -> None:
+    """Save the selected screenshot folder to the active local config."""
+    selected_value = st.session_state.get("watch_folder_input", "")
+    try:
+        if not str(selected_value).strip():
+            raise ValueError("Choose a screenshot folder first.")
+        selected = Path(selected_value).expanduser()
+        saved_path = save_watch_folder(selected, config_path)
+    except (OSError, ValueError) as exc:
+        st.session_state["watch_folder_feedback"] = ("error", str(exc))
+        return
+
+    st.session_state["watch_folder_input"] = str(selected.resolve())
+    st.session_state["watch_folder_feedback"] = (
+        "success",
+        f"Saved to {saved_path}. Restart the background watcher to monitor this folder.",
+    )
+    load_index_snapshot.clear()
+    count_pending_files.clear()
+
+
+def _render_watch_folder(config: AppConfig, config_path: Path | None) -> None:
+    """Render controls for choosing and saving the local screenshot folder."""
+    st.sidebar.subheader("Watch folder")
+    st.session_state.setdefault("watch_folder_input", str(config.watch_folder))
+    st.sidebar.text_input(
+        "Screenshot folder",
+        key="watch_folder_input",
+        help="Choose the local folder SlothShot should scan and monitor.",
+    )
+    picker_column, save_column = st.sidebar.columns(2)
+    picker_column.button(
+        "Choose folder",
+        key="browse-watch-folder",
+        on_click=_browse_watch_folder,
+        use_container_width=True,
+    )
+    save_column.button(
+        "Save folder",
+        key="save-watch-folder",
+        on_click=_save_watch_folder,
+        args=(config_path or default_config_path(),),
+        type="primary",
+        use_container_width=True,
+    )
+
+    feedback = st.session_state.get("watch_folder_feedback")
+    if feedback:
+        message_type, message = feedback
+        if message_type == "success":
+            st.sidebar.success(message)
+        else:
+            st.sidebar.error(message)
+    if config.watch_folder.is_dir():
+        st.sidebar.caption(f"Configured folder: {config.watch_folder}")
+    else:
+        st.sidebar.warning(f"The configured folder does not exist: {config.watch_folder}")
+
+
 def _search(config: AppConfig, query: str, mode: str, *, limit: int = 30) -> list[SearchResult]:
     """Run one local search using a short-lived read-only database connection."""
     if not config.database_path.is_file():
@@ -213,6 +306,7 @@ def _format_timestamp(value: str | None) -> str:
 
 def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapshot:
     """Show index status and launch indexing outside the Streamlit process."""
+    _render_watch_folder(config, config_path)
     st.sidebar.header("Local index")
     try:
         snapshot = load_index_snapshot(str(config.database_path))

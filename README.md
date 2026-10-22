@@ -78,6 +78,11 @@ slothshot search "address already in use" --mode keyword
 slothshot ui          # browser UI on http://127.0.0.1:8501
 ```
 
+In the UI sidebar, use **Choose folder** to select the screenshot directory and
+**Save folder** to store it in your local config. **Index now** scans the
+selected folder; restart an already-running background watcher to apply the new
+folder to automatic monitoring.
+
 **4. Make it lazy.** Start the watcher at every login so new screenshots are indexed on their own:
 
 ```powershell

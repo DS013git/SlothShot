@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +58,78 @@ def default_config_path() -> Path:
         if app_data:
             return Path(app_data) / "SlothShot" / "config.toml"
     return Path.home() / ".config" / "slothshot" / "config.toml"
+
+
+def save_watch_folder(folder: Path, config_path: Path | None = None) -> Path:
+    """Persist only the watch-folder setting, preserving the rest of the TOML file."""
+    if not str(folder).strip():
+        raise ValueError("Choose a screenshot folder first.")
+    selected_folder = folder.expanduser().resolve()
+    if not selected_folder.is_dir():
+        raise NotADirectoryError(f"Screenshot folder does not exist: {selected_folder}")
+
+    destination = (config_path or default_config_path()).expanduser()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        original = destination.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        original = ""
+
+    newline = "\r\n" if "\r\n" in original else "\n"
+    lines = original.splitlines()
+    encoded_folder = json.dumps(str(selected_folder), ensure_ascii=False)
+    watch_folder_line = f"watch_folder = {encoded_folder}"
+
+    paths_start = next((i for i, line in enumerate(lines) if line.strip() == "[paths]"), None)
+    if paths_start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(("[paths]", watch_folder_line))
+    else:
+        paths_end = next(
+            (
+                i
+                for i in range(paths_start + 1, len(lines))
+                if re.match(r"^\s*\[[^]]+\]\s*(?:#.*)?$", lines[i])
+            ),
+            len(lines),
+        )
+        watch_folder_index = next(
+            (
+                i
+                for i in range(paths_start + 1, paths_end)
+                if re.match(r"^\s*watch_folder\s*=", lines[i])
+            ),
+            None,
+        )
+        if watch_folder_index is None:
+            lines.insert(paths_end, watch_folder_line)
+        else:
+            lines[watch_folder_index] = watch_folder_line
+
+    updated = newline.join(lines)
+    if original.endswith(("\n", "\r")) or not original:
+        updated += newline
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_file.write(updated)
+            temporary_path = Path(temporary_file.name)
+        os.replace(temporary_path, destination)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+    return destination
 
 
 def _expand_path(value: str, *, base: Path) -> Path:
