@@ -20,6 +20,7 @@ from slothshot.config import load_config
 from slothshot.db import connect_database
 from slothshot.embed import EmbeddingModel, embedding_model_cached
 from slothshot.indexer import scan_folder
+from slothshot.naming import rename_indexed_image, unique_suggested_filename
 from slothshot.ocr import OCR_MODEL_FILES, OCRReader
 from slothshot.search import search_hybrid, search_keyword, search_semantic
 from slothshot.watcher import ScreenshotWatcher
@@ -171,6 +172,11 @@ def ocr(
 @app.command()
 def index(
     folder: Path = typer.Argument(..., help="Screenshot folder to scan recursively."),
+    rename_new: bool = typer.Option(
+        False,
+        "--rename-new",
+        help="Automatically rename newly indexed screenshots from their saved OCR text.",
+    ),
     config_file: Path | None = typer.Option(
         None, "--config", help="Path to config.toml; defaults to the user config path."
     ),
@@ -184,8 +190,30 @@ def index(
         typer.echo(f"Could not prepare local database: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    rename_counts = {"renamed": 0, "skipped": 0}
+
+    def rename_new_image(image_id: int, path: Path, ocr_text: str) -> None:
+        suggested_name = unique_suggested_filename(ocr_text, path)
+        if suggested_name == path.name:
+            return
+        try:
+            rename_indexed_image(
+                config.database_path, image_id, path, suggested_name, folder
+            )
+        except (FileExistsError, FileNotFoundError, OSError, ValueError, sqlite3.Error):
+            rename_counts["skipped"] += 1
+            logger.exception("Could not automatically rename newly indexed screenshot %s", path)
+        else:
+            rename_counts["renamed"] += 1
+
     try:
-        summary = scan_folder(folder, connection, OCRReader(config), EmbeddingModel(config))
+        summary = scan_folder(
+            folder,
+            connection,
+            OCRReader(config),
+            EmbeddingModel(config),
+            on_indexed=rename_new_image if rename_new else None,
+        )
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         typer.echo(f"Index scan failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -197,6 +225,11 @@ def index(
         f"{summary.found} found, {summary.indexed} indexed, {summary.reused} reused, "
         f"{summary.skipped} unchanged, {summary.failed} failed, {summary.removed} removed"
     )
+    if rename_new:
+        typer.echo(
+            f"Automatic renaming: {rename_counts['renamed']} renamed, "
+            f"{rename_counts['skipped']} skipped"
+        )
     if summary.failed:
         raise typer.Exit(code=1)
 

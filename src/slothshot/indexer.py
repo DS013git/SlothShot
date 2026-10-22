@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -197,6 +198,7 @@ def scan_folder(
     connection: sqlite3.Connection,
     reader: ImageReader,
     embedder: EmbeddingModel | None = None,
+    on_indexed: Callable[[int, Path, str], None] | None = None,
 ) -> IndexSummary:
     """Index supported images under ``folder`` and remove stale entries.
 
@@ -212,9 +214,12 @@ def scan_folder(
 
     counts = {"indexed": 0, "reused": 0, "skipped": 0, "failed": 0}
     discovered = {str(path.resolve()) for path in paths}
+    newly_indexed: list[Path] = []
     for path in paths:
         outcome = index_image(connection, path, reader)
         counts[outcome] += 1
+        if outcome in {"indexed", "reused"}:
+            newly_indexed.append(path.resolve())
         if embedder is not None and outcome != "failed":
             row = image_by_path(connection, path)
             if row is not None and row["status"] == "indexed":
@@ -243,6 +248,12 @@ def scan_folder(
             with connection:
                 connection.execute("DELETE FROM images WHERE id = ?", (row["id"],))
             removed += 1
+
+    if on_indexed is not None:
+        for path in newly_indexed:
+            row = image_by_path(connection, path)
+            if row is not None and row["status"] == "indexed":
+                on_indexed(int(row["id"]), path, str(row["ocr_text"] or ""))
 
     summary = IndexSummary(
         found=len(paths),
