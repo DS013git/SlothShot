@@ -71,7 +71,7 @@ It checks Python, dependencies, SQLite FTS5, the OCR model files, the embedding-
 ollama pull qwen3-vl:2b-instruct
 ```
 
-The model runs on your computer through Ollama's local API; SlothShot sends it the screenshot and OCR text only on your machine. The default model download is about 1.1 GB. The OCR models ship inside the `rapidocr` package.
+The model runs on your computer through Ollama's local API; SlothShot sends it the screenshot and OCR text only on your machine. The default model download is about 1.9 GB. The OCR models ship inside the `rapidocr` package.
 
 ```powershell
 slothshot index "$env:USERPROFILE\Pictures\Screenshots"
