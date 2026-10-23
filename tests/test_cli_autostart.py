@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from slothshot import cli
 from slothshot.cli import _configure_file_logging, app
 
 
@@ -59,3 +60,31 @@ def test_watch_failure_is_recorded_in_the_log_file(
 
     assert result.exit_code == 1
     assert "Screenshot folder does not exist" in log_file.read_text(encoding="utf-8")
+
+
+def test_watch_rename_new_flag_enables_configured_auto_rename(tmp_path: Path, monkeypatch) -> None:
+    folder = tmp_path / "screenshots"
+    folder.mkdir()
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[paths]\nwatch_folder = "{folder.as_posix()}"\n'
+        f'data_dir = "{(tmp_path / "data").as_posix()}"\n'
+        "[models]\nauto_rename = false\n",
+        encoding="utf-8",
+    )
+    captured = []
+
+    class FakeWatcher:
+        def __init__(self, value) -> None:
+            captured.append(value)
+
+        def run(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli, "ScreenshotWatcher", FakeWatcher)
+    result = CliRunner().invoke(
+        app, ["watch", str(folder), "--rename-new", "--config", str(config)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured[0].auto_rename is True

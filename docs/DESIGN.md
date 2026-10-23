@@ -7,10 +7,14 @@ computer. By default, screenshots come from `Pictures/Screenshots`; the
 database and model cache live beneath `%LOCALAPPDATA%\SlothShot` on Windows.
 There is no service component.
 
-Python's built-in `tomllib` reads configuration so setup does not add a TOML
-dependency. `AppConfig` is immutable, resolves paths once, and validates values
-before later indexing code can use them. The `doctor` command reports the
-environment and checks SQLite FTS5 without loading OCR or embedding models.
+If the operating system denies writes to the default data folder, the app
+stores its database and logs in `.slothshot-data` beside the source checkout;
+the embedding-model cache stays in its default location.
+
+Python 3.11 is required and uses the built-in `tomllib`. `AppConfig` is immutable,
+resolves paths once, and validates values before later indexing code can use
+them. The `doctor` command checks the Python version and SQLite FTS5 without
+loading OCR or embedding models.
 Importing model packages can be slow and can trigger downloads, so doctor uses
 package metadata only and never downloads models.
 
@@ -20,10 +24,11 @@ Phase 4 will make those cache checks and offline behavior explicit. FastEmbed
 and RapidOCR use ONNX Runtime for CPU inference; no PyTorch or GPU runtime is
 part of this project.
 
-`slothshot.sqlite3` is stored outside the repository. The ignore rules also
-exclude screenshot and evaluation folders so private inputs are not accidentally
-added to source control. Synthetic test images will be generated in a later
-phase.
+`slothshot.sqlite3` is stored outside the repository by default; the ignored
+`.slothshot-data` folder is used only when the default location is not writable.
+The ignore rules also exclude screenshot and evaluation folders so private
+inputs are not accidentally added to source control. Synthetic test images are
+generated separately for evaluation.
 
 ## Planned shape
 
@@ -132,6 +137,15 @@ can be recovered by the next catch-up scan. Ctrl+C stops event observation,
 drains queued tasks, and closes the worker's database connection. Any image that
 has not settled before shutdown is picked up by the next catch-up scan.
 
+When `[models].auto_rename` is enabled, or `watch --rename-new` is passed, the
+worker uses the shared vision-renaming path after indexing each image. A SQLite
+claim prevents another process from naming the same pending image concurrently.
+The watcher suppresses the file-move event caused by its own rename, so that
+move does not queue another OCR or indexing pass.
+Vision calls time out after 600 seconds by default and can be configured with
+`models.vision_timeout_seconds`. Failed suggestions remain pending; a locked
+file gets three short retries before it is left pending for the next attempt.
+
 ## Phase 6: local Streamlit UI
 
 The UI's search and display operations open the existing SQLite file with
@@ -140,7 +154,7 @@ read-only connections, so it works whether or not the background watcher is
 running. A reviewed **Rename file** action opens a separate write connection,
 renames one image in place, updates its indexed path in a SQLite transaction,
 and never overwrites an existing file. The **Index now** button starts the existing CLI index command as a
-separate child process and records its output in the local app-data folder;
+separate child process and records its output in the configured local data folder;
 it does not turn the UI's connection into a writer or hold the page while OCR
 and embedding run.
 
@@ -151,6 +165,15 @@ code block provides a browser-side copy button without sending paths to a
 clipboard service. Thumbnails are reduced to a bounded size and cached in
 memory. OCR text can suggest a concise app/site and page name; the user reviews
 or edits it before choosing to rename that image.
+
+The **Rename all screenshots** UI action lists the candidate count and up to
+five source filenames, then asks for one confirmation. After confirmation, the
+local vision model's suggested names are applied automatically to all indexed
+images under the configured watch folder; there is no per-file review or undo.
+The `rename-all` CLI command runs immediately without confirmation. Both flows
+rename files in place, preserve extensions, avoid overwriting existing files,
+and update the indexed paths. Users should back up the folder before a bulk
+rename.
 
 The sidebar reads totals and the last successful index time from SQLite. Its
 pending count is a cached estimate of supported image paths not yet recorded

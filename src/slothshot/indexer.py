@@ -7,7 +7,7 @@ import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -85,13 +85,13 @@ def _write_image(
 ) -> None:
     """Insert or update one image row and commit it as its own unit of work."""
     normalized = str(path.resolve())
-    indexed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    indexed_at = datetime.now(UTC).isoformat(timespec="seconds")
     with connection:
         connection.execute(
             """INSERT INTO images (
                    path, sha256, width, height, ocr_text, avg_confidence,
-                   file_mtime, indexed_at, status
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   file_mtime, indexed_at, status, name_state
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
                ON CONFLICT(path) DO UPDATE SET
                    sha256 = excluded.sha256,
                    width = excluded.width,
@@ -100,7 +100,8 @@ def _write_image(
                    avg_confidence = excluded.avg_confidence,
                    file_mtime = excluded.file_mtime,
                    indexed_at = excluded.indexed_at,
-                   status = excluded.status""",
+                   status = excluded.status,
+                   name_state = 'pending'""",
             (
                 normalized,
                 sha256,
@@ -223,16 +224,20 @@ def scan_folder(
         if embedder is not None and outcome != "failed":
             row = image_by_path(connection, path)
             if row is not None and row["status"] == "indexed":
-                if outcome == "reused":
-                    reuse_embeddings_for_hash(
-                        connection, image_id=int(row["id"]), sha256=str(row["sha256"])
+                try:
+                    if outcome == "reused":
+                        reuse_embeddings_for_hash(
+                            connection, image_id=int(row["id"]), sha256=str(row["sha256"])
+                        )
+                    save_image_embeddings(
+                        connection,
+                        image_id=int(row["id"]),
+                        text=str(row["ocr_text"]),
+                        model=embedder,
                     )
-                save_image_embeddings(
-                    connection,
-                    image_id=int(row["id"]),
-                    text=str(row["ocr_text"]),
-                    model=embedder,
-                )
+                except sqlite3.IntegrityError:
+                    logger.exception("Could not save embeddings for %s", path)
+                    counts["failed"] += 1
 
     # Limit cleanup to descendants of this root; indexing another directory
     # must never remove records owned by a different scan.

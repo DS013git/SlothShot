@@ -6,10 +6,11 @@ import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass
-from pathlib import Path
-
+import time
 import tomllib
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,8 @@ class AppConfig:
     model_cache: Path
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     vision_model: str = "qwen3-vl:2b-instruct"
+    vision_timeout_seconds: int = 600
+    auto_rename: bool = False
     max_image_side: int = 1600
     preprocess: bool = True
     invert_dark_mode: bool = False
@@ -40,15 +43,52 @@ def _default_data_dir() -> Path:
     return Path.home() / ".local" / "share" / "SlothShot"
 
 
+@lru_cache(maxsize=8)
+def _writable_data_dir(preferred: Path) -> Path:
+    """Use the standard data folder, falling back locally if the OS denies writes."""
+
+    def can_write(directory: Path) -> bool:
+        probe = directory / f".slothshot-write-check-{os.getpid()}-{time.time_ns()}"
+        try:
+            with probe.open("xb"):
+                pass
+        except OSError:
+            return False
+        finally:
+            probe.unlink(missing_ok=True)
+        return True
+
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        if can_write(preferred):
+            return preferred
+    except OSError:
+        pass
+
+    # Editable installs can keep local data beside the checkout, where it is
+    # also covered by the repository's ignore rules. For packaged installs,
+    # use the current directory rather than writing into site-packages.
+    project_root = Path(__file__).resolve().parents[2]
+    fallback_root = project_root if (project_root / "pyproject.toml").is_file() else Path.cwd()
+    fallback = fallback_root / ".slothshot-data"
+    fallback.mkdir(parents=True, exist_ok=True)
+    if not can_write(fallback):
+        raise PermissionError(f"SlothShot cannot write to its data folder: {fallback}")
+    return fallback
+
+
 def default_config() -> AppConfig:
-    """Build defaults without creating directories or touching user files."""
+    """Build defaults, using a local fallback if the standard data folder is blocked."""
     profile = Path.home()
     watch_folder = profile / "Pictures" / "Screenshots"
-    data_dir = _default_data_dir()
+    preferred_data_dir = _default_data_dir()
+    data_dir = _writable_data_dir(preferred_data_dir)
     return AppConfig(
         watch_folder=watch_folder,
         data_dir=data_dir,
-        model_cache=data_dir / "models",
+        # Keep using an existing model cache if only the database/log folder is
+        # restricted by Windows security policy.
+        model_cache=preferred_data_dir / "models",
     )
 
 
@@ -176,12 +216,22 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     embedding_model = models.get("embedding", defaults.embedding_model)
     vision_model = models.get("vision", defaults.vision_model)
+    vision_timeout_seconds = models.get("vision_timeout_seconds", defaults.vision_timeout_seconds)
+    auto_rename = models.get("auto_rename", defaults.auto_rename)
     preprocess = ocr.get("preprocess", defaults.preprocess)
     invert_dark_mode = ocr.get("invert_dark_mode", defaults.invert_dark_mode)
     if not isinstance(embedding_model, str) or not embedding_model.strip():
         raise ValueError("models.embedding must be a non-empty string")
     if not isinstance(vision_model, str) or not vision_model.strip():
         raise ValueError("models.vision must be a non-empty string")
+    if (
+        isinstance(vision_timeout_seconds, bool)
+        or not isinstance(vision_timeout_seconds, int)
+        or vision_timeout_seconds < 1
+    ):
+        raise ValueError("models.vision_timeout_seconds must be a positive integer")
+    if not isinstance(auto_rename, bool):
+        raise ValueError("models.auto_rename must be true or false")
     if not isinstance(preprocess, bool):
         raise ValueError("ocr.preprocess must be true or false")
     if not isinstance(invert_dark_mode, bool):
@@ -202,6 +252,8 @@ def load_config(path: Path | None = None) -> AppConfig:
         model_cache=path_value("model_cache", data_dir / "models"),
         embedding_model=embedding_model.strip(),
         vision_model=vision_model.strip(),
+        vision_timeout_seconds=vision_timeout_seconds,
+        auto_rename=auto_rename,
         max_image_side=max_image_side,
         preprocess=preprocess,
         invert_dark_mode=invert_dark_mode,

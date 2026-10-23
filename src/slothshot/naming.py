@@ -4,14 +4,41 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Callable
 from pathlib import Path
 
 from slothshot.db import connect_database
 
 _FILENAME_SKIP_WORDS = {
-    "and", "are", "for", "from", "http", "https", "into", "the", "this", "that",
-    "with", "www", "com", "org", "net", "home", "file", "edit", "view", "help",
-    "chrome", "firefox", "safari", "google", "website", "browser", "bookmarks", "new", "tab",
+    "and",
+    "are",
+    "for",
+    "from",
+    "http",
+    "https",
+    "into",
+    "the",
+    "this",
+    "that",
+    "with",
+    "www",
+    "com",
+    "org",
+    "net",
+    "home",
+    "file",
+    "edit",
+    "view",
+    "help",
+    "chrome",
+    "firefox",
+    "safari",
+    "google",
+    "website",
+    "browser",
+    "bookmarks",
+    "new",
+    "tab",
 }
 _DATE_OR_TIME_LINE = re.compile(
     r"(?i)(?:\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\b|\b\d{1,2}:\d{2}(?::\d{2})?\b|"
@@ -44,9 +71,26 @@ def suggest_filename(ocr_text: str, current_path: Path) -> str:
         text,
     )
     known_sites = (
-        "Google Docs", "Google Drive", "Stack Overflow", "GitHub", "Render", "Figma", "Notion",
-        "YouTube", "Vercel", "Netlify", "Slack", "Discord", "Reddit", "ChatGPT", "Claude",
-        "Trello", "Linear", "Jira", "Canva", "Wikipedia",
+        "Google Docs",
+        "Google Drive",
+        "Stack Overflow",
+        "GitHub",
+        "Render",
+        "Figma",
+        "Notion",
+        "YouTube",
+        "Vercel",
+        "Netlify",
+        "Slack",
+        "Discord",
+        "Reddit",
+        "ChatGPT",
+        "Claude",
+        "Trello",
+        "Linear",
+        "Jira",
+        "Canva",
+        "Wikipedia",
     )
     site = next((name for name in known_sites if name.casefold() in folded), None)
     if not site and domain_match:
@@ -87,9 +131,9 @@ def suggest_filename(ocr_text: str, current_path: Path) -> str:
             summary += f" in {browser}"
         title = f"{summary}{current_path.suffix.lower()}"
     elif browser:
-        summary = page_context or ("Website" if domain_match else None)
-        if summary:
-            title = f"{summary} in {browser}{current_path.suffix.lower()}"
+        page_summary = page_context or ("Website" if domain_match else None)
+        if page_summary:
+            title = f"{page_summary} in {browser}{current_path.suffix.lower()}"
     selected: list[str] = []
     seen: set[str] = set()
     for raw_line in ocr_text.splitlines():
@@ -98,7 +142,8 @@ def suggest_filename(ocr_text: str, current_path: Path) -> str:
             continue
         words = re.findall(r"[^\W_]+", line, flags=re.UNICODE)
         meaningful = [
-            word for word in words
+            word
+            for word in words
             if len(word) >= 3 and not word.isdigit() and word.casefold() not in _FILENAME_SKIP_WORDS
         ]
         if not meaningful or len(meaningful) > 14:
@@ -123,7 +168,11 @@ def suggest_filename(ocr_text: str, current_path: Path) -> str:
     stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", Path(title).stem)
     stem = re.sub(r"\s+", " ", stem).strip(" .")[:90].rstrip(" .")
     if not stem or stem.upper() in {
-        "CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }:
         stem = "Screenshot"
@@ -141,7 +190,11 @@ def filename_from_description(description: str, current_path: Path) -> str:
     stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", text)
     stem = re.sub(r"\s+", " ", stem).strip(" .")[:90].rstrip(" .")
     if not stem or stem.upper() in {
-        "CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }:
         raise ValueError("The vision model did not suggest a valid filename.")
@@ -169,7 +222,13 @@ def unique_filename(suggested: str, current_path: Path) -> str:
 
 
 def rename_indexed_image(
-    database_path: Path, image_id: int, old_path: Path, new_name: str, watch_folder: Path
+    database_path: Path,
+    image_id: int,
+    old_path: Path,
+    new_name: str,
+    watch_folder: Path,
+    *,
+    before_move: Callable[[Path, Path], None] | None = None,
 ) -> Path:
     """Rename one indexed image in place and keep its SQLite/FTS path synchronized."""
     root = watch_folder.expanduser().resolve()
@@ -194,7 +253,11 @@ def rename_indexed_image(
     if any(char in stem for char in '<>:"/\\|?*') or any(ord(char) < 32 for char in stem):
         raise ValueError("The filename contains characters that Windows does not allow.")
     reserved_names = {
-        "CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }
     if stem.upper() in reserved_names:
@@ -214,13 +277,17 @@ def rename_indexed_image(
         row = connection.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
         if row is None or Path(str(row["path"])).resolve() != source:
             raise ValueError("The indexed path changed. Refresh search results and try again.")
+        if before_move is not None:
+            before_move(source, destination)
         source.rename(destination)
         moved = True
         cursor = connection.execute(
-            "UPDATE images SET path = ? WHERE id = ?", (str(destination), image_id)
+            "UPDATE images SET path = ?, name_state = 'done' WHERE id = ?",
+            (str(destination), image_id),
         )
         if cursor.rowcount != 1:
             raise RuntimeError("Could not update the indexed screenshot path.")
+        connection.execute("DELETE FROM image_name_claims WHERE image_id = ?", (image_id,))
         connection.commit()
     except Exception:
         connection.rollback()
@@ -230,5 +297,3 @@ def rename_indexed_image(
     finally:
         connection.close()
     return destination
-
-

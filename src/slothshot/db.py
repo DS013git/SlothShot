@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 
 logger = logging.getLogger("slothshot.db")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 
 def connect_database(path: Path | str) -> sqlite3.Connection:
@@ -49,6 +49,34 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             COMMIT;
             """
         )
+        version = 2
+
+    if version == 2:
+        # Existing screenshots must not be renamed by a later --rename-new run.
+        connection.executescript(
+            """
+            BEGIN;
+            ALTER TABLE images ADD COLUMN name_state TEXT NOT NULL DEFAULT 'pending'
+                CHECK (name_state IN ('pending', 'done'));
+            UPDATE images SET name_state = 'done';
+            PRAGMA user_version = 3;
+            COMMIT;
+            """
+        )
+        version = 3
+
+    if version == 3:
+        connection.executescript(
+            """
+            BEGIN;
+            CREATE TABLE image_name_claims (
+                image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                claimed_at REAL NOT NULL
+            );
+            PRAGMA user_version = 4;
+            COMMIT;
+            """
+        )
         logger.info("Migrated SlothShot database schema to version %d", SCHEMA_VERSION)
         return
 
@@ -67,7 +95,9 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             avg_confidence REAL NOT NULL DEFAULT 0.0,
             file_mtime REAL NOT NULL,
             indexed_at TEXT NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('indexed', 'error'))
+            status TEXT NOT NULL CHECK (status IN ('indexed', 'error')),
+            name_state TEXT NOT NULL DEFAULT 'pending'
+                CHECK (name_state IN ('pending', 'done'))
         );
         CREATE INDEX IF NOT EXISTS images_sha256_idx ON images(sha256);
         CREATE INDEX IF NOT EXISTS images_indexed_at_idx ON images(indexed_at);
@@ -102,8 +132,12 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
             chunk_text TEXT NOT NULL DEFAULT '',
             PRIMARY KEY (image_id, chunk_index, model_name)
         );
+        CREATE TABLE IF NOT EXISTS image_name_claims (
+            image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+            claimed_at REAL NOT NULL
+        );
         INSERT INTO images_fts(images_fts) VALUES ('rebuild');
-        PRAGMA user_version = 2;
+        PRAGMA user_version = 4;
         COMMIT;
         """
     )

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image
 
+from slothshot import indexer
 from slothshot.db import connect_database
 from slothshot.indexer import scan_folder
 
@@ -63,6 +65,31 @@ def test_scan_indexes_once_then_skips_unchanged_bytes(tmp_path: Path) -> None:
             ).fetchone()
             is not None
         )
+    finally:
+        connection.close()
+
+
+def test_embedding_integrity_error_does_not_abort_later_images(tmp_path: Path, monkeypatch) -> None:
+    folder = tmp_path / "screenshots"
+    _save(folder / "a.png", "white")
+    _save(folder / "b.png", "blue")
+    connection = _open_db(tmp_path)
+    calls: list[int] = []
+
+    def save_embeddings(_connection, *, image_id: int, **_kwargs) -> int:
+        calls.append(image_id)
+        if len(calls) == 1:
+            raise sqlite3.IntegrityError("simulated duplicate embedding")
+        return 1
+
+    monkeypatch.setattr(indexer, "save_image_embeddings", save_embeddings)
+    try:
+        summary = scan_folder(folder, connection, FakeReader(), FakeEmbedder())
+        assert summary.found == 2
+        assert summary.indexed == 2
+        assert summary.failed == 1
+        assert len(calls) == 2
+        assert connection.execute("SELECT count(*) FROM images").fetchone()[0] == 2
     finally:
         connection.close()
 

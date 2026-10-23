@@ -198,7 +198,7 @@ def save_image_embeddings(
     vectors = model.embed_documents(chunks)
     with connection:
         connection.executemany(
-            """INSERT INTO embeddings (
+            """INSERT OR IGNORE INTO embeddings (
                    image_id, chunk_index, model_name, embedding, chunk_text
                ) VALUES (?, ?, ?, ?, ?)""",
             [

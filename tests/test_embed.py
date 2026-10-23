@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -94,6 +95,58 @@ def test_embedding_wrapper_is_lazy_and_stores_float32_chunks(tmp_path: Path) -> 
         assert row["chunk_text"] == "one two three"
     finally:
         connection.close()
+
+
+def test_concurrent_embedding_inserts_ignore_duplicate_chunks(tmp_path: Path) -> None:
+    database = tmp_path / "racing-embeddings.sqlite3"
+    connection = connect_database(database)
+    image_id = _add_image(connection, "C:/shots/race.png")
+    connection.commit()
+    connection.close()
+    barrier = threading.Barrier(2)
+
+    class RacingModel:
+        model_name = "race-model"
+
+        def embed_documents(self, texts: list[str]) -> list[np.ndarray]:
+            barrier.wait(timeout=3)
+            return [np.array([1.0, 2.0], dtype=np.float32) for _ in texts]
+
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        worker_connection = connect_database(database)
+        try:
+            save_image_embeddings(
+                worker_connection,
+                image_id=image_id,
+                text="same image content",
+                model=RacingModel(),
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            worker_connection.close()
+
+    workers = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in workers:
+        thread.start()
+    for thread in workers:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in workers)
+    assert errors == []
+    check = connect_database(database)
+    try:
+        assert (
+            check.execute(
+                "SELECT count(*) FROM embeddings WHERE image_id = ? AND model_name = 'race-model'",
+                (image_id,),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        check.close()
 
 
 def test_cache_check_does_not_claim_empty_directory_is_ready(tmp_path: Path) -> None:

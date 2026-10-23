@@ -9,6 +9,8 @@ model_cache = '%LOCALAPPDATA%\SlothShot\models'
 [models]
 embedding = 'BAAI/bge-small-en-v1.5'
 vision = 'qwen3-vl:2b-instruct'
+vision_timeout_seconds = 600
+auto_rename = false
 
 [ocr]
 max_image_side = 1600

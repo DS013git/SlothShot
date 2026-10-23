@@ -17,6 +17,7 @@ from slothshot.config import load_config
 from slothshot.db import connect_database
 from slothshot.indexer import index_image
 from slothshot.ui import (
+    _index_completion_message,
     _readonly_connection,
     _start_index_process,
     count_pending_files,
@@ -191,3 +192,20 @@ def test_index_now_child_process_uses_local_config_and_completes(tmp_path: Path)
 
     log = (config.data_dir / "ui-index.log").read_text(encoding="utf-8")
     assert "Index complete: 0 found" in log
+    assert "0 indexed, 0 renamed, 0 locked, 0 model errors" in log
+
+
+def test_ui_index_message_shows_counts_or_last_three_error_lines(tmp_path: Path) -> None:
+    log_path = tmp_path / "ui-index.log"
+    log_path.write_text(
+        "one\ntwo\nthree\nfour\n3 indexed, 3 renamed, 1 locked, 0 model errors\n",
+        encoding="utf-8",
+    )
+
+    assert _index_completion_message(log_path, 0) == (
+        "3 indexed, 3 renamed, 1 locked, 0 model errors"
+    )
+    failure = _index_completion_message(log_path, 2)
+    assert "Indexing failed with code 2" in failure
+    assert "three\nfour\n3 indexed, 3 renamed, 1 locked, 0 model errors" in failure
+    assert "one" not in failure

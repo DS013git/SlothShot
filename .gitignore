@@ -10,8 +10,12 @@ dist/
 .pytest-tmp/
 .ruff_cache/
 .coverage
+.env
+.env.*
+config.toml
 
 # Local application data and private screenshots
+.slothshot-data/
 *.db
 *.db-shm
 *.db-wal

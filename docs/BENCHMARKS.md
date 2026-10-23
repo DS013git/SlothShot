@@ -33,11 +33,15 @@ ONNX model files in the installed package. No model download was needed.
 | Peak process RSS during indexing | 586.1 MiB |
 | SQLite database after 105 images | 0.34 MiB |
 
-OCR is the slow stage on this CPU: about 3 seconds per screenshot, so a new
-screenshot becomes searchable roughly 3 to 4 seconds after it is saved. The
-per-image embedding step during indexing took 0.02 to 0.06 s once the model was
-loaded. The RSS measurement includes local OCR and embedding model
-initialization.
+On the synthetic benchmark images, OCR is the slow stage on this CPU: about 3
+seconds per screenshot. Real screenshots take about 12-25 seconds each for OCR.
+The per-image embedding step during indexing took 0.02 to 0.06 s once the model was
+loaded, so OCR plus embedding work is roughly 3 to 4 seconds per image. That
+does not include the watcher's file-stability wait and queue delay. A separate
+single warm measurement from synthetic screenshot save to searchable was about
+6 seconds end to end, matching the README; repeated watcher latency was not
+measured. The RSS
+measurement includes local OCR and embedding model initialization.
 
 An earlier run of this same benchmark (100 regular images, before the tricky
 cases existed) measured a 8.9 s median OCR time and a 14.5 minute index pass.

@@ -8,7 +8,7 @@ Private, offline screenshot search for Windows. Find images by exact OCR text or
 
 You take a screenshot of an error, a chat, a recipe, a bank page. Three weeks later you remember *"that Docker port thing"*, not the file name. SlothShot watches your screenshots folder, reads the text in every image with OCR, and lets you search by **exact words** and by **meaning**. Searching `docker port problem` finds the screenshot that says `address already in use`.
 
-SlothShot uses OCR for search and a local open-weight vision model to suggest descriptive screenshot filenames. **Index now** renames newly indexed or changed screenshots in the background. **Rename all screenshots** asks for confirmation, then re-analyzes every indexed screenshot in the selected folder. You can also edit a filename from a search result and choose **Rename file**. Files are renamed in place; SlothShot does not sort, move to another folder, or upload them.
+SlothShot uses OCR for search and a local open-weight vision model to suggest descriptive screenshot filenames. **Index now** renames newly indexed or changed screenshots in the background. **Rename all screenshots** asks for one confirmation, then automatically applies model-suggested names to every indexed screenshot in the selected folder; it does not show each suggestion for review. Bulk renaming has no undo, so back up the folder first. For one image, edit the filename suggestion in its search result and choose **Rename file** to review and apply that name. Files are renamed in place; SlothShot does not sort, move to another folder, or upload them.
 
 Built for the DEV **Hacktoberfest 2026 Open-Source AI Challenge**, weekly theme *"Slow and Steady"*: the more lazy you are, the more it helps.
 
@@ -47,7 +47,7 @@ One SQLite file holds everything. Search reads it whether or not the watcher is 
 
 ## Quick start
 
-Requires **Windows 10/11** and **Python 3.10 or 3.11**.
+Requires **Windows 10/11** and **Python 3.11**.
 
 ```powershell
 git clone https://github.com/DS013git/SlothShot.git slothshot
@@ -89,11 +89,12 @@ In the UI sidebar, use **Choose folder** to select the screenshot directory and
 **Save folder** to store it in your local config. **Index now** scans the
 selected folder and asks the local vision model to name new or changed images;
 restart an already-running background watcher to apply the new folder to
-automatic monitoring. Use **Rename all screenshots** to review a confirmation
-before re-analyzing all indexed images in that folder. Search results also
-include an editable filename suggestion; choose **Rename file** to apply it in
-place. The file extension is preserved, existing files are never overwritten,
-and the search index updates with the new path.
+automatic monitoring. **Rename all screenshots** shows the number of indexed
+files and asks once before automatically renaming them in place. It does not
+offer per-file review or undo; back up the folder first. Search results include
+an editable filename suggestion for individual **Rename file** actions. The
+file extension is preserved, existing files are never overwritten, and the
+search index updates with the new path.
 
 **4. Make it lazy.** Start the watcher at every login so new screenshots are indexed on their own:
 
@@ -109,9 +110,9 @@ and the search index updates with the new path.
 | `slothshot ocr <image> [--no-preprocess]` | Print the text and per-line confidence for one image, with timing. |
 | `slothshot index <folder>` | OCR and index new or changed images. Skips files already known by SHA-256, handles renames without redoing OCR, removes entries for deleted files. Safe to re-run or interrupt. |
 | `slothshot index <folder> --rename-new` | Also use the local vision model to name newly indexed or changed screenshots. |
-| `slothshot rename-all <folder>` | Use the local vision model to re-name every indexed screenshot under a folder. |
+| `slothshot rename-all <folder>` | Use the local vision model to rename every indexed screenshot under a folder; the CLI runs immediately without confirmation and has no undo. Back up the folder first. |
 | `slothshot search "<query>" [--mode keyword\|semantic\|hybrid] [--limit N]` | Search. Default mode is `hybrid`. Prints path, score and a snippet. |
-| `slothshot watch [folder] [--log-file PATH]` | Catch up on anything missed, then watch for new files until Ctrl+C. |
+| `slothshot watch [folder] [--rename-new] [--log-file PATH]` | Catch up on anything missed, then watch for new files until Ctrl+C; `--rename-new` enables vision naming for new screenshots. |
 | `slothshot ui` | Start the Streamlit interface, bound to `127.0.0.1` only. |
 
 Every command accepts `--config path\to\config.toml`.
@@ -149,6 +150,8 @@ model_cache  = '%LOCALAPPDATA%\SlothShot\models'
 [models]
 embedding = 'BAAI/bge-small-en-v1.5'               # any fastembed-supported model
 vision = 'qwen3-vl:2b-instruct'                    # local Ollama vision model for filenames
+vision_timeout_seconds = 600                       # slow CPU inference may take several minutes
+auto_rename = false                                # also name screenshots indexed by the watcher
 
 [ocr]
 max_image_side = 1600       # larger images are downscaled before OCR
@@ -158,12 +161,14 @@ invert_dark_mode = false    # experimental, off by default
 
 Windows environment variables are expanded, and relative paths resolve next to the config file. If you change `models.embedding`, re-index so stored vectors match the new model. `models.vision` can name any vision model available to Ollama.
 
+If Windows denies writes to the default data folder, SlothShot stores its database and logs in `.slothshot-data` beside the source checkout (or in the current directory for a packaged install). This fallback keeps the database local; the folder is excluded from Git. The embedding-model cache remains in the default location.
+
 ## Privacy
 
 - **No cloud, no telemetry, no accounts.** Model downloads use the network once; image naming requests go only to Ollama on `127.0.0.1`. SlothShot doesn't send screenshots to a hosted service.
 - **The UI binds to `127.0.0.1`.** Streamlit usage statistics are disabled.
-- **You control bulk changes.** Index automatically renames only new or changed screenshots. Renaming the full folder requires your confirmation. Each file is renamed in place, with conflicts handled by adding a number to the filename.
-- **The database is not encrypted.** It stores the OCR text of every screenshot in plain text in `%LOCALAPPDATA%\SlothShot\slothshot.sqlite3`. That includes anything visible in an image, such as one-time passwords, account numbers or private messages. Anyone who can read your user profile can read that file. Treat it like the screenshots themselves, and rely on Windows disk encryption (BitLocker) if you need protection at rest.
+- **You control bulk changes.** Index automatically renames only new or changed screenshots. The UI asks once before renaming indexed files in bulk; the `rename-all` CLI command runs immediately. Bulk renaming has no undo. Each file is renamed in place, with conflicts handled by adding a number to the filename.
+- **The database is not encrypted.** It stores the OCR text of every screenshot in plain text in `%LOCALAPPDATA%\SlothShot\slothshot.sqlite3`, or `.slothshot-data\slothshot.sqlite3` beside the checkout if Windows denies writes to the default folder. That includes anything visible in an image, such as one-time passwords, account numbers or private messages. Anyone who can read the file can read that text. Treat it like the screenshots themselves, and rely on Windows disk encryption (BitLocker) if you need protection at rest.
 - **This repository contains no real screenshots.** All test and benchmark images are synthetic, generated by `scripts/make_sample_data.py`. Real-data folders and private evaluation files are in `.gitignore`.
 
 "Works with Wi-Fi off" was verified by running the full pipeline (OCR, embeddings, indexing, all three search modes) in a process where every network connection raised an error; it made zero connection attempts. The recorded demo ([`docs/DEMO.md`](docs/DEMO.md)) turns the real Wi-Fi off as well.
@@ -174,8 +179,8 @@ Measured on **Intel Core i3-1215U, 7.65 GiB RAM, Windows, Python 3.11, CPU only*
 
 | Measurement | Result |
 | --- | ---: |
-| OCR time per screenshot, median / p95 | 3.0 s / 3.3 s |
-| New screenshot to searchable (watcher, warm; one measurement) | about 6 s |
+| Synthetic OCR time per screenshot, median / p95 | 3.0 s / 3.3 s |
+| New synthetic screenshot to searchable (watcher, warm; one end-to-end measurement including file-stability delay) | about 6 seconds |
 | Peak process RAM while indexing (OCR and embeddings) | 586 MiB |
 | Database size for 105 images | 0.34 MiB |
 | Keyword search at 5,000 records | about 2 ms |
@@ -183,6 +188,17 @@ Measured on **Intel Core i3-1215U, 7.65 GiB RAM, Windows, Python 3.11, CPU only*
 | Hybrid search at 5,000 records | about 109 ms |
 
 Search at 1,000 and 5,000 records was measured on scaled copies of the real index (text and vectors reused), not on 5,000 separately processed images.
+
+On this CPU, OCR for real screenshots takes about 12-25 s per image. The
+synthetic-image OCR and watcher timings above are faster and should not be used
+to estimate a real screenshot backlog.
+
+`models.auto_rename` defaults to `false`; set it to `true` or pass
+`slothshot watch --rename-new` to name screenshots as the watcher indexes them.
+Vision requests allow 600 seconds by default (`models.vision_timeout_seconds`).
+Timed-out or failed suggestions stay pending for a later retry. If a file is
+locked, SlothShot retries the rename three times with short delays, then leaves
+it pending for the next indexing or watcher attempt.
 
 Retrieval on the synthetic set (12 queries):
 
@@ -198,14 +214,14 @@ These numbers are a smoke test. The queries and images were written by the same 
 
 Please read these before relying on SlothShot.
 
-- **OCR is the slow part.** About 3 s per screenshot on an i3. A first index of thousands of screenshots will take hours, but it resumes where it stopped and runs in the background.
+- **OCR is the slow part.** Real screenshots take about 12-25 s each on this i3. The synthetic benchmark is faster at about 3 s per image; a first index of thousands of real screenshots can take hours, but it resumes where it stopped and runs in the background.
 - **OCR makes mistakes.** On the synthetic hard cases, tiny text (11 px) lost spacing, one of four dense small lines was dropped, and a blank image still cost about 3 s. Words OCR never read cannot be searched by keyword. Details are in the failure gallery in `docs/BENCHMARKS.md`.
 - **Text only.** It does not understand photos, diagrams or screenshots without text.
 - **English-first.** The default embedding model is English. Hindi, Hinglish and other languages are not supported by default, and OCR quality for them is untested. You can configure another fastembed model, but that is not evaluated here.
 - **Semantic search is a linear scan.** It is fast at thousands of screenshots (about 142 ms at 5,000 measured on scaled data) but latency grows with the number of records. There is no vector index. It has not been tested beyond 5,000 records.
 - **Keyword fallback is loose.** If no screenshot contains all your words, it retries with any word, which can surface loosely related results.
 - **Windows only in practice.** The core is cross-platform Python, but autostart and the "open folder" button target Windows. Only Windows was tested.
-- **Python 3.10 and 3.11 only**, as pinned in `pyproject.toml`.
+- **Python 3.11 only**, as pinned in `pyproject.toml`.
 - **Not verified:** the at-login autostart trigger (tested by starting the task manually), the task's automatic retry-on-failure setting, and behavior on machines other than the one benchmarked.
 
 ## Models and dependencies, with licenses
@@ -254,7 +270,7 @@ python scripts\bench.py --output data\bench --count 100 --repeats 5
 python scripts\eval_search.py --ground-truth data\bench\screenshots\ground_truth.yaml --db data\bench\indexed.sqlite3
 ```
 
-The project type-checks cleanly with `mypy src --ignore-missing-imports` (run ad hoc, not a pinned dependency).
+An ad hoc source type check is available with `mypy src --ignore-missing-imports --follow-imports=skip`; mypy is not a pinned dependency.
 
 ## Roadmap
 

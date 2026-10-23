@@ -7,7 +7,7 @@ name = "slothshot"
 version = "0.1.0"
 description = "A local, offline librarian for your screenshots"
 readme = "README.md"
-requires-python = ">=3.10,<3.12"
+requires-python = ">=3.11,<3.12"
 license = "MIT"
 authors = [{ name = "SlothShot contributors" }]
 dependencies = [
@@ -37,12 +37,13 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = [".", "src"]
 addopts = "-ra -m 'not slow'"
 markers = ["slow: runs local OCR/embedding models and may take several seconds"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

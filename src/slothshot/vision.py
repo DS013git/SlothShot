@@ -4,21 +4,40 @@ from __future__ import annotations
 
 import base64
 import json
+from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from PIL import Image
+
 OLLAMA_CHAT_URL = "http://127.0.0.1:11434/api/chat"
-VISION_TIMEOUT_SECONDS = 180
+VISION_TIMEOUT_SECONDS = 600
+MAX_VISION_IMAGE_SIDE = 1024
 
 
 class VisionModelError(RuntimeError):
     """Raised when the local vision model cannot name a screenshot."""
 
 
-def describe_screenshot(image_path: Path, ocr_text: str, model_name: str) -> str:
+class OllamaUnavailableError(VisionModelError):
+    """Raised when no connection to the local Ollama server can be made."""
+
+
+def describe_screenshot(
+    image_path: Path,
+    ocr_text: str,
+    model_name: str,
+    timeout_seconds: int | None = None,
+) -> str:
     """Ask a local open-weight model for a short, evidence-grounded screenshot name."""
-    image = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    timeout = VISION_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    with Image.open(image_path) as source:
+        source.thumbnail((MAX_VISION_IMAGE_SIDE, MAX_VISION_IMAGE_SIDE), Image.Resampling.LANCZOS)
+        resized = source.convert("RGB")
+    image_buffer = BytesIO()
+    resized.save(image_buffer, format="JPEG", quality=85, optimize=True)
+    image = base64.b64encode(image_buffer.getvalue()).decode("ascii")
     prompt = (
         "Look at this screenshot and choose a short, specific filename that tells a person "
         "what is shown. Prefer a recognizable website or app plus its page or purpose, and "
@@ -32,6 +51,7 @@ def describe_screenshot(image_path: Path, ocr_text: str, model_name: str) -> str
     request_body = json.dumps(
         {
             "model": model_name,
+            "keep_alive": "10m",
             "messages": [
                 {"role": "user", "content": prompt, "images": [image]},
             ],
@@ -47,7 +67,7 @@ def describe_screenshot(image_path: Path, ocr_text: str, model_name: str) -> str
         method="POST",
     )
     try:
-        with urlopen(request, timeout=VISION_TIMEOUT_SECONDS) as response:
+        with urlopen(request, timeout=timeout) as response:
             result = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -56,8 +76,16 @@ def describe_screenshot(image_path: Path, ocr_text: str, model_name: str) -> str
                 f"Ollama model {model_name!r} is unavailable. Run `ollama pull {model_name}`."
             ) from exc
         raise VisionModelError(f"Ollama returned HTTP {exc.code}: {detail}") from exc
-    except (OSError, TimeoutError, URLError) as exc:
-        raise VisionModelError(
+    except TimeoutError as exc:
+        raise VisionModelError(f"Ollama timed out after {timeout} s.") from exc
+    except URLError as exc:
+        if isinstance(exc.reason, TimeoutError) or "timed out" in str(exc.reason).casefold():
+            raise VisionModelError(f"Ollama timed out after {timeout} s.") from exc
+        raise OllamaUnavailableError(
+            "Could not contact local Ollama at 127.0.0.1:11434. Make sure Ollama is running."
+        ) from exc
+    except OSError as exc:
+        raise OllamaUnavailableError(
             "Could not contact local Ollama at 127.0.0.1:11434. Make sure Ollama is running."
         ) from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:

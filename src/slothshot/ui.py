@@ -295,8 +295,7 @@ def bulk_rename_candidates(
     connection = _readonly_connection(database_path)
     try:
         rows = connection.execute(
-            "SELECT id, path FROM images "
-            "WHERE status = 'indexed' ORDER BY path COLLATE NOCASE"
+            "SELECT id, path FROM images WHERE status = 'indexed' ORDER BY path COLLATE NOCASE"
         ).fetchall()
     finally:
         connection.close()
@@ -320,8 +319,11 @@ def bulk_rename_candidates(
 
 def _start_index_process(config: AppConfig, config_path: Path | None) -> subprocess.Popen[bytes]:
     """Run the existing index command as a child so Streamlit stays responsive."""
+    python_executable = sys.executable
+    if python_executable is None:
+        raise OSError("Could not locate the current Python executable.")
     command = [
-        sys.executable,
+        python_executable,
         "-m",
         "slothshot.cli",
         "index",
@@ -339,7 +341,7 @@ def _start_index_process(config: AppConfig, config_path: Path | None) -> subproc
     log_path = config.data_dir / "ui-index.log"
     config.data_dir.mkdir(parents=True, exist_ok=True)
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-    with log_path.open("ab") as log_file:
+    with log_path.open("wb") as log_file:
         return subprocess.Popen(
             command,
             env=environment,
@@ -353,8 +355,11 @@ def _start_rename_all_process(
     config: AppConfig, config_path: Path | None
 ) -> subprocess.Popen[bytes]:
     """Run the confirmed vision-based bulk rename outside the Streamlit process."""
+    python_executable = sys.executable
+    if python_executable is None:
+        raise OSError("Could not locate the current Python executable.")
     command = [
-        sys.executable,
+        python_executable,
         "-m",
         "slothshot.cli",
         "rename-all",
@@ -371,7 +376,7 @@ def _start_rename_all_process(
     log_path = config.data_dir / "ui-rename.log"
     config.data_dir.mkdir(parents=True, exist_ok=True)
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-    with log_path.open("ab") as log_file:
+    with log_path.open("wb") as log_file:
         return subprocess.Popen(
             command,
             env=environment,
@@ -390,6 +395,30 @@ def _format_timestamp(value: str | None) -> str:
     except ValueError:
         return value
     return timestamp.strftime("%Y-%m-%d %H:%M")
+
+
+def _read_log_tail(path: Path, count: int = 3) -> list[str]:
+    """Read the last useful lines of a child-process log for the UI."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    return [line for line in lines if line.strip()][-count:]
+
+
+def _index_completion_message(log_path: Path, return_code: int) -> str:
+    """Return indexing counts on success or recent diagnostic output on error."""
+    lines = _read_log_tail(log_path, count=10)
+    if return_code == 0:
+        summary_pattern = re.compile(r"^\d+ indexed, \d+ renamed, \d+ locked, \d+ model errors$")
+        return next(
+            (line for line in reversed(lines) if summary_pattern.fullmatch(line)),
+            "Indexing and automatic renaming finished.",
+        )
+    details = "\n".join(lines[-3:])
+    if details:
+        return f"Indexing failed with code {return_code}:\n{details}"
+    return f"Indexing failed with code {return_code}; see {log_path}."
 
 
 def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapshot:
@@ -427,12 +456,10 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
         if return_code is None:
             st.sidebar.info("Indexing is running in the background.")
         elif return_code == 0:
-            st.sidebar.success(
-                "Indexing and automatic renaming finished. Refresh to update counts."
-            )
+            st.sidebar.success(_index_completion_message(config.data_dir / "ui-index.log", 0))
         else:
             st.sidebar.error(
-                f"Indexing exited with code {return_code}. See {config.data_dir / 'ui-index.log'}."
+                _index_completion_message(config.data_dir / "ui-index.log", return_code)
             )
 
     rename_process = st.session_state.get("rename_all_process")
@@ -444,10 +471,9 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
             f"Vision renaming finished. See {config.data_dir / 'ui-rename.log'} for details."
         )
     elif rename_process is not None:
-        st.sidebar.error(
-            f"Vision renaming exited with code {rename_process.returncode}. "
-            f"See {config.data_dir / 'ui-rename.log'}."
-        )
+        tail = "\n".join(_read_log_tail(config.data_dir / "ui-rename.log"))
+        message = f"Vision renaming failed with code {rename_process.returncode}."
+        st.sidebar.error(f"{message}\n{tail}" if tail else message)
 
     index_disabled = (process is not None and process.poll() is None) or rename_running
     if st.sidebar.button(
@@ -469,9 +495,7 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
         help="Ask the local vision model to rename indexed screenshots after confirmation.",
     ):
         try:
-            candidates, skipped = bulk_rename_candidates(
-                config.database_path, config.watch_folder
-            )
+            candidates, skipped = bulk_rename_candidates(config.database_path, config.watch_folder)
             st.session_state["bulk_rename_candidates"] = candidates
             st.session_state["bulk_rename_skipped"] = skipped
             st.session_state["confirm_bulk_rename"] = True
@@ -513,9 +537,7 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
             st.session_state.pop("bulk_rename_skipped", None)
             st.session_state.pop("confirm_bulk_rename", None)
             st.rerun()
-        if confirm_columns[1].button(
-            "Cancel", key="cancel-bulk-rename", use_container_width=True
-        ):
+        if confirm_columns[1].button("Cancel", key="cancel-bulk-rename", use_container_width=True):
             st.session_state.pop("bulk_rename_candidates", None)
             st.session_state.pop("bulk_rename_skipped", None)
             st.session_state.pop("confirm_bulk_rename", None)
@@ -572,8 +594,7 @@ def _render_result(result: SearchResult, slot: Any, config: AppConfig) -> None:
                     value=suggested_name,
                     key=f"suggested-name-{result.image_id}",
                     help=(
-                        "Edit the OCR-based suggestion before renaming. "
-                        "The file extension is kept."
+                        "Edit the OCR-based suggestion before renaming. The file extension is kept."
                     ),
                 )
                 renamed = st.form_submit_button("Rename file")
@@ -597,7 +618,11 @@ def _render_result(result: SearchResult, slot: Any, config: AppConfig) -> None:
                     st.session_state["rename_feedback"] = f"Renamed to {new_path.name}"
                     st.rerun()
                 except (
-                    FileExistsError, FileNotFoundError, OSError, ValueError, sqlite3.Error
+                    FileExistsError,
+                    FileNotFoundError,
+                    OSError,
+                    ValueError,
+                    sqlite3.Error,
                 ) as exc:
                     st.error(f"Could not rename screenshot: {exc}")
 

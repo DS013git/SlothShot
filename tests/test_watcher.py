@@ -20,8 +20,10 @@ from watchdog.events import (
     FileMovedEvent,
 )
 
+from slothshot import renaming
 from slothshot.config import default_config
 from slothshot.db import connect_database
+from slothshot.indexer import index_image
 from slothshot.watcher import (
     DebouncedEventHandler,
     ScreenshotWatcher,
@@ -31,7 +33,11 @@ from slothshot.watcher import (
 
 
 class FakeReader:
+    def __init__(self) -> None:
+        self.calls: list[Path] = []
+
     def read(self, image_path: Path) -> SimpleNamespace:
+        self.calls.append(image_path)
         return SimpleNamespace(
             text=f"words from {image_path.stem}", average_confidence=0.9, error=None
         )
@@ -223,3 +229,105 @@ def test_worker_catches_up_then_handles_file_events_and_closes_connection(
     assert worker_thread_ids[0] != threading.get_ident()
     assert not observer.is_alive()
     assert connections[0].closed
+
+
+def test_watcher_renames_new_image_and_ignores_its_move_event(tmp_path: Path, monkeypatch) -> None:
+    folder = tmp_path / "screenshots"
+    folder.mkdir()
+    config = replace(
+        default_config(),
+        watch_folder=folder,
+        data_dir=tmp_path / "app-data",
+        model_cache=tmp_path / "models",
+        auto_rename=True,
+    )
+    observer = FakeObserver()
+    reader = FakeReader()
+    monkeypatch.setattr(renaming, "describe_screenshot", lambda *_args: "New Name")
+    watcher = ScreenshotWatcher(
+        config,
+        reader=reader,
+        embedder=FakeEmbedder(),
+        observer_factory=lambda: observer,
+        stability_waiter=lambda *_args, **_kwargs: True,
+    )
+    watcher.start()
+    try:
+        assert watcher.catchup_complete.wait(2.0)
+        source = _save(folder / "new.png")
+        observer.handler.dispatch(FileCreatedEvent(str(source)))
+        watcher.tasks.join()
+
+        destination = folder / "New Name.png"
+        assert destination.is_file()
+        assert len(reader.calls) == 1
+        connection = connect_database(config.database_path)
+        try:
+            rows = connection.execute("SELECT path, name_state FROM images").fetchall()
+            assert len(rows) == 1
+            assert rows[0]["path"] == str(destination.resolve())
+            assert rows[0]["name_state"] == "done"
+        finally:
+            connection.close()
+
+        observer.handler.dispatch(FileMovedEvent(str(source), str(destination)))
+        assert watcher.tasks.empty()
+        assert len(reader.calls) == 1
+    finally:
+        watcher.stop()
+
+
+def test_two_workers_claim_one_pending_rename_once(tmp_path: Path, monkeypatch) -> None:
+    folder = tmp_path / "screenshots"
+    folder.mkdir()
+    source = _save(folder / "race.png")
+    database = tmp_path / "slothshot.sqlite3"
+    connection = connect_database(database)
+    assert index_image(connection, source, FakeReader()) == "indexed"
+    row = connection.execute(
+        "SELECT id FROM images WHERE path = ?", (str(source.resolve()),)
+    ).fetchone()
+    image_id = int(row["id"])
+    connection.close()
+
+    calls = 0
+    call_lock = threading.Lock()
+
+    def describe(*_args) -> str:
+        nonlocal calls
+        with call_lock:
+            calls += 1
+        time.sleep(0.1)
+        return "Single Rename"
+
+    monkeypatch.setattr(renaming, "describe_screenshot", describe)
+    results = []
+    errors: list[BaseException] = []
+
+    def rename_worker() -> None:
+        try:
+            results.append(
+                renaming.rename_images_with_vision(
+                    database, folder, "fake-model", image_ids=[image_id]
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    workers = [threading.Thread(target=rename_worker) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=5)
+
+    assert all(not worker.is_alive() for worker in workers)
+    assert not errors
+    assert calls == 1
+    assert sum(summary.renamed for summary in results) == 1
+    assert (folder / "Single Rename.png").is_file()
+    check = connect_database(database)
+    try:
+        assert check.execute("SELECT count(*) FROM images").fetchone()[0] == 1
+        assert check.execute("SELECT count(*) FROM image_name_claims").fetchone()[0] == 0
+    finally:
+        check.close()
