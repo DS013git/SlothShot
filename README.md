@@ -200,7 +200,8 @@ Timed-out or failed suggestions stay pending for a later retry. If a file is
 locked, SlothShot makes six rename attempts over about 6.25 seconds, then leaves
 it pending for the next indexing or watcher attempt. The **Open image** button
 uses the default image viewer; close it before renaming because some viewers
-keep the file locked.
+keep the file locked. Bulk renaming removes stale index entries for screenshots
+that have disappeared from disk and reports how many were missing.
 
 Retrieval on the synthetic set (12 queries):
 

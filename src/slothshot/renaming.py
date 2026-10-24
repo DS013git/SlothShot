@@ -27,6 +27,7 @@ class RenameSummary:
     renamed: int = 0
     unchanged: int = 0
     skipped: int = 0
+    missing: int = 0
     failed: int = 0
     unavailable: bool = False
     pending: int = 0
@@ -103,6 +104,19 @@ def _finish_unchanged(database_path: Path, image_id: int) -> None:
         connection.close()
 
 
+def _remove_stale_image(database_path: Path, image_id: int, stored_path: str) -> bool:
+    """Remove an indexed row whose screenshot has disappeared from disk."""
+    connection = connect_database(database_path)
+    try:
+        with connection:
+            cursor = connection.execute(
+                "DELETE FROM images WHERE id = ? AND path = ?", (image_id, stored_path)
+            )
+        return cursor.rowcount == 1
+    finally:
+        connection.close()
+
+
 def rename_images_with_vision(
     database_path: Path,
     watch_folder: Path,
@@ -135,7 +149,7 @@ def rename_images_with_vision(
     finally:
         connection.close()
 
-    renamed = unchanged = skipped = failed = locked = model_errors = 0
+    renamed = unchanged = skipped = missing = failed = locked = model_errors = 0
     unavailable = False
     last_error = None
     for row in rows:
@@ -148,8 +162,7 @@ def rename_images_with_vision(
             continue
 
         try:
-            if not path.is_file():
-                raise FileNotFoundError(f"Screenshot no longer exists: {path}")
+            path.stat()
             description = describe_screenshot(
                 path,
                 str(row["ocr_text"] or ""),
@@ -170,11 +183,34 @@ def rename_images_with_vision(
                 before_move,
             )
             renamed += 1
+        except FileNotFoundError as exc:
+            try:
+                path.stat()
+            except FileNotFoundError:
+                if _remove_stale_image(database_path, image_id, str(row["path"])):
+                    missing += 1
+                    logger.info("Removed stale index entry for missing screenshot: %s", path)
+                else:
+                    skipped += 1
+                    logger.info("Skipped screenshot whose indexed path changed: %s", path)
+            except OSError:
+                failed += 1
+                last_error = str(exc)
+                logger.error("Could not verify screenshot path %s: %s", path, exc)
+            else:
+                failed += 1
+                last_error = str(exc)
+                logger.error("Could not name screenshot %s: %s", path, exc)
         except PermissionError as exc:
             failed += 1
             locked += 1
-            last_error = f"Screenshot is locked: {path} ({exc})"
-            logger.warning("Screenshot is locked; leaving its name pending: %s (%s)", path, exc)
+            last_error = (
+                f"Could not rename screenshot: {path} ({exc}). Close any image viewer or "
+                "Explorer Preview pane, then retry; if it still fails, check folder permissions."
+            )
+            logger.warning(
+                "Screenshot rename was denied; leaving its name pending: %s (%s)", path, exc
+            )
         except OllamaUnavailableError as exc:
             failed += 1
             model_errors += 1
@@ -209,6 +245,7 @@ def rename_images_with_vision(
         renamed=renamed,
         unchanged=unchanged,
         skipped=skipped,
+        missing=missing,
         failed=failed,
         unavailable=unavailable,
         pending=pending,

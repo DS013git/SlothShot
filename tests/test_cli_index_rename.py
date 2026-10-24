@@ -213,3 +213,26 @@ def test_unchanged_vision_name_and_manual_rename_mark_done(tmp_path: Path, monke
     destination = rename_indexed_image(database, image_id, another, "User Name.png", folder)
     assert destination.is_file()
     assert _name_state(database, destination) == "done"
+
+
+def test_rename_all_drops_missing_screenshot_from_index(tmp_path: Path, monkeypatch) -> None:
+    folder, database, config = _setup(tmp_path, monkeypatch)
+    source = _image(folder, "removed.png")
+    indexed = _run(folder, config, rename=False)
+    assert indexed.exit_code == 0, indexed.output
+    source.unlink()
+
+    result = CliRunner().invoke(cli.app, ["rename-all", str(folder), "--config", str(config)])
+
+    assert result.exit_code == 0, result.output
+    assert "1 missing" in result.output
+    connection = connect_database(database)
+    try:
+        assert (
+            connection.execute(
+                "SELECT 1 FROM images WHERE path = ?", (str(source.resolve()),)
+            ).fetchone()
+            is None
+        )
+    finally:
+        connection.close()

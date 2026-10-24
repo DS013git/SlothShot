@@ -228,7 +228,8 @@ def index(
         assert rename_counts is not None
         typer.echo(
             f"Automatic renaming: {rename_counts.renamed} renamed, "
-            f"{rename_counts.locked} locked, {rename_counts.model_errors} model error(s), "
+            f"{rename_counts.locked} locked, {rename_counts.missing} missing, "
+            f"{rename_counts.model_errors} model error(s), "
             f"{rename_counts.unchanged + rename_counts.skipped} unchanged or busy, "
             f"{rename_counts.pending} pending, {rename_counts.failed} error(s)"
         )
@@ -274,7 +275,8 @@ def rename_all(
 
     typer.echo(
         f"Vision rename complete: {summary.renamed} renamed, "
-        f"{summary.locked} locked, {summary.model_errors} model error(s), "
+        f"{summary.locked} locked, {summary.missing} missing, "
+        f"{summary.model_errors} model error(s), "
         f"{summary.unchanged + summary.skipped} unchanged or busy"
     )
     if summary.failed:
