@@ -415,6 +415,21 @@ def _index_completion_message(log_path: Path, return_code: int) -> str:
             (line for line in reversed(lines) if summary_pattern.fullmatch(line)),
             "Indexing and automatic renaming finished.",
         )
+    if return_code == 2 and any(line.startswith("Index complete:") for line in lines):
+        rename_line = next(
+            (line for line in lines if line.startswith("Automatic renaming:")),
+            "Automatic renaming reported an issue.",
+        )
+        pending_match = re.search(r"(\d+) pending", rename_line)
+        pending = int(pending_match.group(1)) if pending_match else 0
+        detail_lines = [
+            line
+            for line in lines
+            if line.startswith(("Automatic renaming:", "Last rename error:"))
+        ]
+        details = "\n".join(detail_lines)
+        noun = "screenshot" if pending == 1 else "screenshots"
+        return f"Indexing completed; {pending} {noun} pending rename.\n{details}"
     details = "\n".join(lines[-3:])
     if details:
         return f"Indexing failed with code {return_code}:\n{details}"
@@ -457,6 +472,10 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
             st.sidebar.info("Indexing is running in the background.")
         elif return_code == 0:
             st.sidebar.success(_index_completion_message(config.data_dir / "ui-index.log", 0))
+        elif return_code == 2:
+            st.sidebar.warning(
+                _index_completion_message(config.data_dir / "ui-index.log", return_code)
+            )
         else:
             st.sidebar.error(
                 _index_completion_message(config.data_dir / "ui-index.log", return_code)
@@ -570,7 +589,14 @@ def _render_result(result: SearchResult, slot: Any, config: AppConfig) -> None:
         st.caption("Path (use the copy button on the path below)")
         st.code(result.path, language=None)
         action_columns = st.columns(2)
-        if action_columns[0].button("Open image", key=f"open-image-{result.image_id}"):
+        if action_columns[0].button(
+            "Open image",
+            key=f"open-image-{result.image_id}",
+            help=(
+                "Opens the image in your default viewer. Close the viewer before renaming; "
+                "it may keep the file locked."
+            ),
+        ):
             try:
                 _open_image(path)
             except OSError as exc:

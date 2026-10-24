@@ -47,8 +47,8 @@ def test_locked_rename_retries_then_stays_pending_and_counts_locked(
 
     summary = rename_images_with_vision(database, folder, "test-model", image_ids=[image_id])
 
-    assert move_attempts == 4  # Initial try plus three retries.
-    assert len(sleeps) == 3
+    assert move_attempts == 6  # Initial try plus five retries.
+    assert sleeps == [1.25] * 5
     assert summary.renamed == 0
     assert summary.locked == 1
     assert summary.model_errors == 0

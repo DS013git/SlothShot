@@ -18,8 +18,8 @@ from slothshot.vision import OllamaUnavailableError, VisionModelError, describe_
 
 logger = logging.getLogger("slothshot.renaming")
 CLAIM_STALE_SECONDS = 600
-RENAME_RETRIES = 3
-RENAME_RETRY_DELAY_SECONDS = 0.1
+RENAME_RETRIES = 5
+RENAME_RETRY_DELAY_SECONDS = 1.25
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ def _rename_with_retries(
         except PermissionError:
             if attempt == RENAME_RETRIES:
                 raise
-            time.sleep(RENAME_RETRY_DELAY_SECONDS * (attempt + 1))
+            time.sleep(RENAME_RETRY_DELAY_SECONDS)
 
 
 def _claim_image(database_path: Path, image_id: int, *, pending_only: bool) -> bool:

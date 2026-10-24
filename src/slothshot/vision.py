@@ -32,7 +32,10 @@ def describe_screenshot(
 ) -> str:
     """Ask a local open-weight model for a short, evidence-grounded screenshot name."""
     timeout = VISION_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
-    with Image.open(image_path) as source:
+    # Detach image decoding from the source path so its filesystem handle is
+    # closed before the vision request and subsequent in-place rename.
+    image_bytes = image_path.read_bytes()
+    with Image.open(BytesIO(image_bytes)) as source:
         source.thumbnail((MAX_VISION_IMAGE_SIDE, MAX_VISION_IMAGE_SIDE), Image.Resampling.LANCZOS)
         resized = source.convert("RGB")
     image_buffer = BytesIO()

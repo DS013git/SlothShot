@@ -197,8 +197,10 @@ to estimate a real screenshot backlog.
 `slothshot watch --rename-new` to name screenshots as the watcher indexes them.
 Vision requests allow 600 seconds by default (`models.vision_timeout_seconds`).
 Timed-out or failed suggestions stay pending for a later retry. If a file is
-locked, SlothShot retries the rename three times with short delays, then leaves
-it pending for the next indexing or watcher attempt.
+locked, SlothShot makes six rename attempts over about 6.25 seconds, then leaves
+it pending for the next indexing or watcher attempt. The **Open image** button
+uses the default image viewer; close it before renaming because some viewers
+keep the file locked.
 
 Retrieval on the synthetic set (12 queries):
 

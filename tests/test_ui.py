@@ -195,7 +195,7 @@ def test_index_now_child_process_uses_local_config_and_completes(tmp_path: Path)
     assert "0 indexed, 0 renamed, 0 locked, 0 model errors" in log
 
 
-def test_ui_index_message_shows_counts_or_last_three_error_lines(tmp_path: Path) -> None:
+def test_ui_index_message_shows_counts_pending_renames_or_errors(tmp_path: Path) -> None:
     log_path = tmp_path / "ui-index.log"
     log_path.write_text(
         "one\ntwo\nthree\nfour\n3 indexed, 3 renamed, 1 locked, 0 model errors\n",
@@ -205,7 +205,17 @@ def test_ui_index_message_shows_counts_or_last_three_error_lines(tmp_path: Path)
     assert _index_completion_message(log_path, 0) == (
         "3 indexed, 3 renamed, 1 locked, 0 model errors"
     )
-    failure = _index_completion_message(log_path, 2)
-    assert "Indexing failed with code 2" in failure
-    assert "three\nfour\n3 indexed, 3 renamed, 1 locked, 0 model errors" in failure
-    assert "one" not in failure
+    log_path.write_text(
+        "Index complete: 1 found, 1 indexed, 0 reused, 0 skipped, 0 failed, 0 removed\n"
+        "Automatic renaming: 0 renamed, 1 locked, 0 model error(s), 0 unchanged or busy, "
+        "1 pending, 1 error(s)\n"
+        "Last rename error: Screenshot is locked: capture.png (access denied)\n",
+        encoding="utf-8",
+    )
+    warning = _index_completion_message(log_path, 2)
+    assert warning.startswith("Indexing completed; 1 screenshot pending rename.")
+    assert "Automatic renaming: 0 renamed, 1 locked" in warning
+    assert "Last rename error:" in warning
+
+    error = _index_completion_message(log_path, 1)
+    assert "Indexing failed with code 1" in error
