@@ -9,7 +9,6 @@ import re
 import sqlite3
 import subprocess
 import sys
-import webbrowser
 from dataclasses import dataclass, replace
 from datetime import datetime
 from io import BytesIO
@@ -128,6 +127,16 @@ def load_thumbnail(path: str, modified_ns: int, size: tuple[int, int] = (520, 36
     except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
         logger.info("Could not create a thumbnail for %s", path, exc_info=True)
         return None
+
+
+@st.dialog("Screenshot preview", width="large")
+def _show_image_preview(path: str, modified_ns: int) -> None:
+    """Show a larger in-app preview without launching a process that holds the file."""
+    preview = load_thumbnail(path, modified_ns, size=(2048, 2048))
+    if preview is None:
+        st.info("Image unavailable")
+    else:
+        st.image(preview, width="stretch")
 
 
 def highlighted_snippet(snippet: str) -> str:
@@ -252,20 +261,10 @@ def _search(config: AppConfig, query: str, mode: str, *, limit: int = 30) -> lis
         connection.close()
 
 
-def _open_image(path: Path) -> None:
-    """Ask the local operating system to open one screenshot."""
-    if not path.is_file():
-        raise FileNotFoundError(f"Screenshot no longer exists: {path}")
-    if os.name == "nt":
-        os.startfile(str(path))  # type: ignore[attr-defined]
-    else:
-        webbrowser.open(path.resolve().as_uri())
-
-
 def _open_folder(path: Path) -> None:
-    """Open the containing folder, selecting the screenshot where supported."""
+    """Open the containing folder without selecting the image in a preview pane."""
     if os.name == "nt":
-        subprocess.Popen(["explorer.exe", "/select,", str(path)])
+        subprocess.Popen(["explorer.exe", str(path.parent)])
     elif sys.platform == "darwin":
         subprocess.Popen(["open", "-R", str(path)])
     else:
@@ -593,14 +592,10 @@ def _render_result(result: SearchResult, slot: Any, config: AppConfig) -> None:
             "Open image",
             key=f"open-image-{result.image_id}",
             help=(
-                "Opens the image in your default viewer. Close the viewer before renaming; "
-                "it may keep the file locked."
+                "Shows an in-app preview without opening the file in an external image viewer."
             ),
         ):
-            try:
-                _open_image(path)
-            except OSError as exc:
-                st.error(f"Could not open screenshot: {exc}")
+            _show_image_preview(str(path), modified_ns)
         if action_columns[1].button("Open folder", key=f"open-folder-{result.image_id}"):
             try:
                 _open_folder(path)

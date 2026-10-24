@@ -48,6 +48,10 @@ def test_thumbnail_is_resized_and_cached_by_file_timestamp(tmp_path: Path) -> No
         assert image.height <= 200
         assert image.format == "JPEG"
 
+    renamed_path = image_path.with_name("renamed.png")
+    image_path.rename(renamed_path)
+    assert renamed_path.is_file()
+
 
 def test_read_only_connection_does_not_create_or_change_database(tmp_path: Path) -> None:
     database_path = tmp_path / "app-data" / "slothshot.sqlite3"
