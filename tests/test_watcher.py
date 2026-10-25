@@ -239,6 +239,7 @@ def test_watcher_renames_new_image_and_ignores_its_move_event(tmp_path: Path, mo
         watch_folder=folder,
         data_dir=tmp_path / "app-data",
         model_cache=tmp_path / "models",
+        naming="vision",
         auto_rename=True,
     )
     observer = FakeObserver()

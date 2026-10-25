@@ -8,7 +8,7 @@ Private, offline screenshot search for Windows. Find images by exact OCR text or
 
 You take a screenshot of an error, a chat, a recipe, a bank page. Three weeks later you remember *"that Docker port thing"*, not the file name. SlothShot watches your screenshots folder, reads the text in every image with OCR, and lets you search by **exact words** and by **meaning**. Searching `docker port problem` finds the screenshot that says `address already in use`.
 
-SlothShot uses OCR for search and a local open-weight vision model to suggest descriptive screenshot filenames. **Index now** renames newly indexed or changed screenshots in the background. **Rename all screenshots** asks for one confirmation, then automatically applies model-suggested names to every indexed screenshot in the selected folder; it does not show each suggestion for review. Bulk renaming has no undo, so back up the folder first. For one image, edit the filename suggestion in its search result and choose **Rename file** to review and apply that name. Files are renamed in place; SlothShot does not sort, move to another folder, or upload them.
+SlothShot uses OCR for search and offers three screenshot naming methods: OCR-only (the default, no Ollama), a local text model, or a local vision model. **Index now** names newly indexed or changed screenshots in the background. **Rename all screenshots** asks for one confirmation, then applies names to every indexed screenshot in the selected folder; it does not show each suggestion for review. Bulk renaming has no undo, so back up the folder first. For one image, edit the filename suggestion in its search result and choose **Rename file** to review and apply that name. Files are renamed in place; SlothShot does not sort, move to another folder, or upload them.
 
 Built for the DEV **Hacktoberfest 2026 Open-Source AI Challenge**, weekly theme *"Slow and Steady"*: the more lazy you are, the more it helps.
 
@@ -65,13 +65,15 @@ slothshot doctor
 
 It checks Python, dependencies, SQLite FTS5, the OCR model files, the embedding-model cache and your watch folder.
 
-**2. First run, while online.** The embedding model (about 65 MB in the cache) downloads once the first time you index or search. Install [Ollama](https://ollama.com/download) and download the default vision model once:
+**2. First run, while online.** The embedding model (about 65 MB in the cache) downloads once the first time you index or search. Default OCR naming needs no Ollama. To use text or vision naming, install [Ollama](https://ollama.com/download) and download the selected model:
 
 ```powershell
+ollama pull qwen3:1.7b
+# Only if [models].naming = 'vision':
 ollama pull qwen3-vl:2b-instruct
 ```
 
-The model runs on your computer through Ollama's local API; SlothShot sends it the screenshot and OCR text only on your machine. The default model download is about 1.9 GB. The OCR models ship inside the `rapidocr` package.
+Text and vision models run on your computer through Ollama's local API. Text mode sends only OCR text; vision mode also sends a downscaled screenshot. Vision naming is slow on CPU-only machines and may take many minutes per image. The OCR models ship inside the `rapidocr` package.
 
 ```powershell
 slothshot index "$env:USERPROFILE\Pictures\Screenshots"
@@ -87,10 +89,10 @@ slothshot ui          # browser UI on http://127.0.0.1:8501
 
 In the UI sidebar, use **Choose folder** to select the screenshot directory and
 **Save folder** to store it in your local config. **Index now** scans the
-selected folder and asks the local vision model to name new or changed images;
+selected folder and names new or changed images with the configured naming method;
 restart an already-running background watcher to apply the new folder to
 automatic monitoring. **Rename all screenshots** shows the number of indexed
-files and asks once before automatically renaming them in place. It does not
+files and asks once before applying the configured naming method in place. It does not
 offer per-file review or undo; back up the folder first. Search results include
 an editable filename suggestion for individual **Rename file** actions. The
 file extension is preserved, existing files are never overwritten, and the
@@ -109,10 +111,10 @@ search index updates with the new path.
 | `slothshot doctor` | Health check: Python, packages, FTS5, models, watch folder. |
 | `slothshot ocr <image> [--no-preprocess]` | Print the text and per-line confidence for one image, with timing. |
 | `slothshot index <folder>` | OCR and index new or changed images. Skips files already known by SHA-256, handles renames without redoing OCR, removes entries for deleted files. Safe to re-run or interrupt. |
-| `slothshot index <folder> --rename-new` | Also use the local vision model to name newly indexed or changed screenshots. |
-| `slothshot rename-all <folder>` | Use the local vision model to rename every indexed screenshot under a folder; the CLI runs immediately without confirmation and has no undo. Back up the folder first. |
+| `slothshot index <folder> --rename-new` | Also name newly indexed or changed screenshots using `models.naming`. |
+| `slothshot rename-all <folder>` | Apply `models.naming` to every indexed screenshot under a folder; the CLI runs immediately without confirmation and has no undo. Back up the folder first. |
 | `slothshot search "<query>" [--mode keyword\|semantic\|hybrid] [--limit N]` | Search. Default mode is `hybrid`. Prints path, score and a snippet. |
-| `slothshot watch [folder] [--rename-new] [--log-file PATH]` | Catch up on anything missed, then watch for new files until Ctrl+C; `--rename-new` enables vision naming for new screenshots. |
+| `slothshot watch [folder] [--rename-new] [--log-file PATH]` | Catch up on anything missed, then watch for new files until Ctrl+C; `--rename-new` enables the configured naming method for new screenshots. |
 | `slothshot ui` | Start the Streamlit interface, bound to `127.0.0.1` only. |
 
 Every command accepts `--config path\to\config.toml`.
@@ -149,8 +151,10 @@ model_cache  = '%LOCALAPPDATA%\SlothShot\models'
 
 [models]
 embedding = 'BAAI/bge-small-en-v1.5'               # any fastembed-supported model
-vision = 'qwen3-vl:2b-instruct'                    # local Ollama vision model for filenames
-vision_timeout_seconds = 600                       # slow CPU inference may take several minutes
+naming = 'ocr'                                     # 'ocr' (default), 'text', or 'vision'
+text = 'qwen3:1.7b'                                # local Ollama text model for text naming
+vision = 'qwen3-vl:2b-instruct'                    # local Ollama vision model for vision naming
+vision_timeout_seconds = 600                       # per-request deadline for Ollama naming
 auto_rename = false                                # also name screenshots indexed by the watcher
 
 [ocr]
@@ -159,15 +163,15 @@ preprocess = true           # grayscale, contrast, upscale small images
 invert_dark_mode = false    # experimental, off by default
 ```
 
-Windows environment variables are expanded, and relative paths resolve next to the config file. If you change `models.embedding`, re-index so stored vectors match the new model. `models.vision` can name any vision model available to Ollama.
+Windows environment variables are expanded, and relative paths resolve next to the config file. If you change `models.embedding`, re-index so stored vectors match the new model. `models.naming` chooses `ocr`, `text`, or `vision`. OCR naming uses the existing OCR-based filename suggester and makes no Ollama request. Text naming sends OCR text to `models.text`; vision naming sends OCR text and the screenshot to `models.vision`. Both Ollama model names can be changed to models available locally.
 
 If Windows denies writes to the default data folder, SlothShot stores its database and logs in `.slothshot-data` beside the source checkout (or in the current directory for a packaged install). This fallback keeps the database local; the folder is excluded from Git. The embedding-model cache remains in the default location.
 
 ## Privacy
 
-- **No cloud, no telemetry, no accounts.** Model downloads use the network once; image naming requests go only to Ollama on `127.0.0.1`. SlothShot doesn't send screenshots to a hosted service.
+- **No cloud, no telemetry, no accounts.** Model downloads use the network once. OCR naming needs no Ollama; when text or vision naming is selected, requests go only to Ollama on `127.0.0.1`. SlothShot doesn't send screenshots to a hosted service.
 - **The UI binds to `127.0.0.1`.** Streamlit usage statistics are disabled.
-- **You control bulk changes.** Index automatically renames only new or changed screenshots. The UI asks once before renaming indexed files in bulk; the `rename-all` CLI command runs immediately. Bulk renaming has no undo. Each file is renamed in place, with conflicts handled by adding a number to the filename.
+- **You control bulk changes.** `index --rename-new` names only new or changed screenshots; the watcher does so when automatic naming is enabled. The UI asks once before bulk renaming indexed files; the `rename-all` CLI command runs immediately. Bulk renaming has no undo. Each file is renamed in place, with conflicts handled by adding a number to the filename.
 - **The database is not encrypted.** It stores the OCR text of every screenshot in plain text in `%LOCALAPPDATA%\SlothShot\slothshot.sqlite3`, or `.slothshot-data\slothshot.sqlite3` beside the checkout if Windows denies writes to the default folder. That includes anything visible in an image, such as one-time passwords, account numbers or private messages. Anyone who can read the file can read that text. Treat it like the screenshots themselves, and rely on Windows disk encryption (BitLocker) if you need protection at rest.
 - **This repository contains no real screenshots.** All test and benchmark images are synthetic, generated by `scripts/make_sample_data.py`. Real-data folders and private evaluation files are in `.gitignore`.
 
@@ -193,10 +197,15 @@ On this CPU, OCR for real screenshots takes about 12-25 s per image. The
 synthetic-image OCR and watcher timings above are faster and should not be used
 to estimate a real screenshot backlog.
 
-`models.auto_rename` defaults to `false`; set it to `true` or pass
-`slothshot watch --rename-new` to name screenshots as the watcher indexes them.
-Vision requests allow 600 seconds by default (`models.vision_timeout_seconds`).
-Timed-out or failed suggestions stay pending for a later retry. If a file is
+`models.naming` defaults to `ocr`, which uses no Ollama and names screenshots
+from their extracted text. Set it to `text` for a text-only Ollama request or
+`vision` for image-and-text naming. Vision naming is slow on CPU-only machines;
+expect many minutes per image on a modest CPU. A vision timeout stops the
+current run after the first timed-out request and leaves the remaining names
+pending. Text and vision requests allow 600 seconds by default
+(`models.vision_timeout_seconds`). `models.auto_rename` defaults to `false`;
+set it to `true` or pass `slothshot watch --rename-new` to name screenshots as
+the watcher indexes them. Failed suggestions stay pending for a later retry. If a file is
 locked, SlothShot makes six rename attempts over about 6.25 seconds, then leaves
 it pending for the next indexing or watcher attempt. The **Open image** button
 shows a larger in-app preview, avoiding an external viewer handle. **Open

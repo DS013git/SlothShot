@@ -12,9 +12,16 @@ from slothshot.db import connect_database
 from slothshot.naming import (
     filename_from_description,
     rename_indexed_image,
+    suggest_filename,
     unique_filename,
 )
-from slothshot.vision import OllamaUnavailableError, VisionModelError, describe_screenshot
+from slothshot.vision import (
+    OllamaTimeoutError,
+    OllamaUnavailableError,
+    VisionModelError,
+    describe_screenshot,
+    suggest_name_from_text,
+)
 
 logger = logging.getLogger("slothshot.renaming")
 CLAIM_STALE_SECONDS = 600
@@ -33,6 +40,7 @@ class RenameSummary:
     pending: int = 0
     locked: int = 0
     model_errors: int = 0
+    timed_out: bool = False
     last_error: str | None = None
 
 
@@ -117,18 +125,22 @@ def _remove_stale_image(database_path: Path, image_id: int, stored_path: str) ->
         connection.close()
 
 
-def rename_images_with_vision(
+def rename_images(
     database_path: Path,
     watch_folder: Path,
-    model_name: str,
     *,
+    naming: str = "ocr",
+    text_model: str = "qwen3:1.7b",
+    vision_model: str = "qwen3-vl:2b-instruct",
     vision_timeout_seconds: int = 600,
     image_ids: Iterable[int] | None = None,
     pending_only: bool = True,
     indexed_only: bool = False,
     before_move: Callable[[Path, Path], None] | None = None,
 ) -> RenameSummary:
-    """Vision-name eligible images, atomically claiming each one before work."""
+    """Name eligible screenshots using OCR text or a local Ollama model."""
+    if naming not in {"ocr", "text", "vision"}:
+        raise ValueError("naming must be 'ocr', 'text', or 'vision'")
     root = watch_folder.expanduser().resolve()
     connection = connect_database(database_path)
     try:
@@ -151,6 +163,7 @@ def rename_images_with_vision(
 
     renamed = unchanged = skipped = missing = failed = locked = model_errors = 0
     unavailable = False
+    timed_out = False
     last_error = None
     for row in rows:
         image_id = int(row["id"])
@@ -163,13 +176,23 @@ def rename_images_with_vision(
 
         try:
             path.stat()
-            description = describe_screenshot(
-                path,
-                str(row["ocr_text"] or ""),
-                model_name,
-                vision_timeout_seconds,
-            )
-            new_name = unique_filename(filename_from_description(description, path), path)
+            ocr_text = str(row["ocr_text"] or "")
+            if naming == "ocr":
+                proposed_name = suggest_filename(ocr_text, path)
+            else:
+                if naming == "text":
+                    description = suggest_name_from_text(
+                        ocr_text, text_model, vision_timeout_seconds
+                    )
+                else:
+                    description = describe_screenshot(
+                        path,
+                        ocr_text,
+                        vision_model,
+                        vision_timeout_seconds,
+                    )
+                proposed_name = filename_from_description(description, path)
+            new_name = unique_filename(proposed_name, path)
             if new_name == path.name:
                 _finish_unchanged(database_path, image_id)
                 unchanged += 1
@@ -218,6 +241,18 @@ def rename_images_with_vision(
             last_error = str(exc)
             logger.error("Ollama is unavailable; pending renames will be retried: %s", exc)
             break
+        except OllamaTimeoutError as exc:
+            failed += 1
+            model_errors += 1
+            timed_out = True
+            if naming == "vision":
+                last_error = (
+                    f"Vision naming timed out ({exc}); stopping this run. "
+                    "Remaining screenshots stay pending."
+                )
+            else:
+                last_error = str(exc)
+                logger.error("Could not name screenshot %s: %s", path, exc)
         except (OSError, ValueError, VisionModelError) as exc:
             failed += 1
             if isinstance(exc, VisionModelError):
@@ -228,7 +263,7 @@ def rename_images_with_vision(
             # Successful operations already clear the claim transactionally.
             _release_claim(database_path, image_id)
 
-        if unavailable:
+        if unavailable or (timed_out and naming == "vision"):
             break
 
     connection = connect_database(database_path)
@@ -251,5 +286,31 @@ def rename_images_with_vision(
         pending=pending,
         locked=locked,
         model_errors=model_errors,
+        timed_out=timed_out,
         last_error=last_error,
+    )
+
+
+def rename_images_with_vision(
+    database_path: Path,
+    watch_folder: Path,
+    model_name: str,
+    *,
+    vision_timeout_seconds: int = 600,
+    image_ids: Iterable[int] | None = None,
+    pending_only: bool = True,
+    indexed_only: bool = False,
+    before_move: Callable[[Path, Path], None] | None = None,
+) -> RenameSummary:
+    """Compatibility wrapper for callers that explicitly request vision naming."""
+    return rename_images(
+        database_path,
+        watch_folder,
+        naming="vision",
+        vision_model=model_name,
+        vision_timeout_seconds=vision_timeout_seconds,
+        image_ids=image_ids,
+        pending_only=pending_only,
+        indexed_only=indexed_only,
+        before_move=before_move,
     )

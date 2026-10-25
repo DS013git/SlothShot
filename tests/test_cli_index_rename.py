@@ -13,9 +13,10 @@ import numpy as np
 from PIL import Image
 from typer.testing import CliRunner
 
-from slothshot import cli, vision
+from slothshot import cli, renaming, vision
 from slothshot.db import connect_database
 from slothshot.naming import rename_indexed_image
+from slothshot.vision import OllamaTimeoutError
 
 
 class _Reader:
@@ -91,6 +92,10 @@ def _setup(tmp_path: Path, monkeypatch: object) -> tuple[Path, Path, Path]:
         f'[paths]\nwatch_folder = "{folder.as_posix()}"\n'
         f'data_dir = "{data_dir.as_posix()}"\n'
         f'model_cache = "{(tmp_path / "models").as_posix()}"\n',
+        encoding="utf-8",
+    )
+    config.write_text(
+        config.read_text(encoding="utf-8") + '\n[models]\nnaming = "vision"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(cli, "OCRReader", _Reader)
@@ -234,5 +239,36 @@ def test_rename_all_drops_missing_screenshot_from_index(tmp_path: Path, monkeypa
             ).fetchone()
             is None
         )
+    finally:
+        connection.close()
+
+
+def test_rename_all_stops_after_first_vision_timeout(tmp_path: Path, monkeypatch) -> None:
+    folder, database, config = _setup(tmp_path, monkeypatch)
+    first = _image(folder, "a.png")
+    _image(folder, "b.png")
+    indexed = _run(folder, config, rename=False)
+    assert indexed.exit_code == 0, indexed.output
+
+    requests: list[Path] = []
+
+    def timed_out(path: Path, *_args, **_kwargs) -> str:
+        requests.append(path)
+        raise OllamaTimeoutError("Ollama timed out after 7 s.")
+
+    monkeypatch.setattr(renaming, "describe_screenshot", timed_out)
+    result = CliRunner().invoke(cli.app, ["rename-all", str(folder), "--config", str(config)])
+
+    assert result.exit_code == 2, result.output
+    assert len(requests) == 1
+    assert result.output.count("Vision naming timed out") == 1
+    assert "stopping this run" in result.output
+    assert first.is_file()
+    assert (folder / "b.png").is_file()
+    connection = connect_database(database)
+    try:
+        states = connection.execute("SELECT name_state FROM images ORDER BY path").fetchall()
+        assert [row[0] for row in states] == ["pending", "pending"]
+        assert connection.execute("SELECT COUNT(*) FROM image_name_claims").fetchone()[0] == 0
     finally:
         connection.close()

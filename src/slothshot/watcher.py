@@ -35,7 +35,7 @@ from slothshot.indexer import (
     index_image,
 )
 from slothshot.ocr import OCRReader
-from slothshot.renaming import rename_images_with_vision
+from slothshot.renaming import rename_images
 
 logger = logging.getLogger("slothshot.watcher")
 
@@ -392,14 +392,18 @@ class ScreenshotWatcher:
             model=self.embedder,
         )
         if self.config.auto_rename:
-            rename_images_with_vision(
+            naming_summary = rename_images(
                 self.config.database_path,
                 self.root,
-                self.config.vision_model,
+                naming=self.config.naming,
+                text_model=self.config.text_model,
+                vision_model=self.config.vision_model,
                 vision_timeout_seconds=self.config.vision_timeout_seconds,
                 image_ids=[int(row["id"])],
                 before_move=self._suppress_rename_event,
             )
+            if naming_summary.timed_out and naming_summary.last_error:
+                logger.error("%s", naming_summary.last_error)
         logger.info("Indexed screenshot: %s", path)
 
     def _suppress_rename_event(self, source: Path, destination: Path) -> None:

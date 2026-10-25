@@ -21,6 +21,8 @@ class AppConfig:
     data_dir: Path
     model_cache: Path
     embedding_model: str = "BAAI/bge-small-en-v1.5"
+    naming: str = "ocr"
+    text_model: str = "qwen3:1.7b"
     vision_model: str = "qwen3-vl:2b-instruct"
     vision_timeout_seconds: int = 600
     auto_rename: bool = False
@@ -215,6 +217,8 @@ def load_config(path: Path | None = None) -> AppConfig:
         raise ValueError("ocr.max_image_side must be a positive integer")
 
     embedding_model = models.get("embedding", defaults.embedding_model)
+    naming = models.get("naming", defaults.naming)
+    text_model = models.get("text", defaults.text_model)
     vision_model = models.get("vision", defaults.vision_model)
     vision_timeout_seconds = models.get("vision_timeout_seconds", defaults.vision_timeout_seconds)
     auto_rename = models.get("auto_rename", defaults.auto_rename)
@@ -222,6 +226,10 @@ def load_config(path: Path | None = None) -> AppConfig:
     invert_dark_mode = ocr.get("invert_dark_mode", defaults.invert_dark_mode)
     if not isinstance(embedding_model, str) or not embedding_model.strip():
         raise ValueError("models.embedding must be a non-empty string")
+    if not isinstance(naming, str) or naming not in {"ocr", "text", "vision"}:
+        raise ValueError("models.naming must be 'ocr', 'text', or 'vision'")
+    if not isinstance(text_model, str) or not text_model.strip():
+        raise ValueError("models.text must be a non-empty string")
     if not isinstance(vision_model, str) or not vision_model.strip():
         raise ValueError("models.vision must be a non-empty string")
     if (
@@ -251,6 +259,8 @@ def load_config(path: Path | None = None) -> AppConfig:
         data_dir=data_dir,
         model_cache=path_value("model_cache", data_dir / "models"),
         embedding_model=embedding_model.strip(),
+        naming=naming,
+        text_model=text_model.strip(),
         vision_model=vision_model.strip(),
         vision_timeout_seconds=vision_timeout_seconds,
         auto_rename=auto_rename,

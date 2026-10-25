@@ -40,7 +40,7 @@ class IndexSnapshot:
 
 @dataclass(frozen=True)
 class BulkRenameCandidate:
-    """One indexed screenshot selected for vision-based renaming."""
+    """One indexed screenshot selected for the configured naming strategy."""
 
     image_id: int
     source: Path
@@ -353,7 +353,7 @@ def _start_index_process(config: AppConfig, config_path: Path | None) -> subproc
 def _start_rename_all_process(
     config: AppConfig, config_path: Path | None
 ) -> subprocess.Popen[bytes]:
-    """Run the confirmed vision-based bulk rename outside the Streamlit process."""
+    """Run the confirmed bulk rename outside the Streamlit process."""
     python_executable = sys.executable
     if python_executable is None:
         raise OSError("Could not locate the current Python executable.")
@@ -422,9 +422,7 @@ def _index_completion_message(log_path: Path, return_code: int) -> str:
         pending_match = re.search(r"(\d+) pending", rename_line)
         pending = int(pending_match.group(1)) if pending_match else 0
         detail_lines = [
-            line
-            for line in lines
-            if line.startswith(("Automatic renaming:", "Last rename error:"))
+            line for line in lines if line.startswith(("Automatic renaming:", "Last rename error:"))
         ]
         details = "\n".join(detail_lines)
         noun = "screenshot" if pending == 1 else "screenshots"
@@ -483,14 +481,14 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
     rename_process = st.session_state.get("rename_all_process")
     rename_running = rename_process is not None and rename_process.poll() is None
     if rename_running:
-        st.sidebar.info("Vision model is renaming screenshots in the background.")
+        st.sidebar.info("Screenshot naming is running in the background.")
     elif rename_process is not None and rename_process.poll() == 0:
         st.sidebar.success(
-            f"Vision renaming finished. See {config.data_dir / 'ui-rename.log'} for details."
+            f"Screenshot naming finished. See {config.data_dir / 'ui-rename.log'} for details."
         )
     elif rename_process is not None:
         tail = "\n".join(_read_log_tail(config.data_dir / "ui-rename.log"))
-        message = f"Vision renaming failed with code {rename_process.returncode}."
+        message = f"Screenshot naming failed with code {rename_process.returncode}."
         st.sidebar.error(f"{message}\n{tail}" if tail else message)
 
     index_disabled = (process is not None and process.poll() is None) or rename_running
@@ -498,7 +496,7 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
         "Index now",
         disabled=index_disabled,
         use_container_width=True,
-        help="Index new or changed screenshots, then ask the local vision model for filenames.",
+        help="Index new or changed screenshots, then name them with the configured method.",
     ):
         try:
             st.session_state["index_process"] = _start_index_process(config, config_path)
@@ -510,7 +508,7 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
         "Rename all screenshots",
         disabled=index_disabled or snapshot.total == 0,
         use_container_width=True,
-        help="Ask the local vision model to rename indexed screenshots after confirmation.",
+        help="Rename indexed screenshots with the configured naming method after confirmation.",
     ):
         try:
             candidates, skipped = bulk_rename_candidates(config.database_path, config.watch_folder)
@@ -524,10 +522,18 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
         candidates = st.session_state.get("bulk_rename_candidates", [])
         skipped = st.session_state.get("bulk_rename_skipped", 0)
         if candidates:
+            strategy = {
+                "ocr": "OCR text (offline)",
+                "text": f"the local text model {config.text_model}",
+                "vision": f"the local vision model {config.vision_model}",
+            }[config.naming]
+            duration_note = (
+                " Ollama runs locally and naming may take a while."
+                if config.naming != "ocr"
+                else ""
+            )
             st.sidebar.warning(
-                f"Ask {config.vision_model} to inspect and rename {len(candidates)} "
-                "indexed screenshot(s) in the configured folder? This runs locally and "
-                "may take a while."
+                f"Rename {len(candidates)} indexed screenshot(s) using {strategy}? {duration_note}"
             )
         else:
             st.sidebar.info("No indexed screenshots are available to rename.")
@@ -549,7 +555,7 @@ def _render_sidebar(config: AppConfig, config_path: Path | None) -> IndexSnapsho
                     config, config_path
                 )
             except OSError as exc:
-                st.sidebar.error(f"Could not start vision renaming: {exc}")
+                st.sidebar.error(f"Could not start screenshot naming: {exc}")
                 return snapshot
             st.session_state.pop("bulk_rename_candidates", None)
             st.session_state.pop("bulk_rename_skipped", None)
@@ -591,9 +597,7 @@ def _render_result(result: SearchResult, slot: Any, config: AppConfig) -> None:
         if action_columns[0].button(
             "Open image",
             key=f"open-image-{result.image_id}",
-            help=(
-                "Shows an in-app preview without opening the file in an external image viewer."
-            ),
+            help=("Shows an in-app preview without opening the file in an external image viewer."),
         ):
             _show_image_preview(str(path), modified_ns)
         if action_columns[1].button("Open folder", key=f"open-folder-{result.image_id}"):

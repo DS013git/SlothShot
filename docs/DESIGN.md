@@ -138,13 +138,17 @@ drains queued tasks, and closes the worker's database connection. Any image that
 has not settled before shutdown is picked up by the next catch-up scan.
 
 When `[models].auto_rename` is enabled, or `watch --rename-new` is passed, the
-worker uses the shared vision-renaming path after indexing each image. A SQLite
+worker uses the configured naming method after indexing each image. The default
+`models.naming = "ocr"` builds a filename from OCR text without calling Ollama;
+`text` sends only OCR text to a local text model, and `vision` sends OCR text
+plus a 512-pixel-max screenshot to a local vision model. A SQLite
 claim prevents another process from naming the same pending image concurrently.
 The watcher suppresses the file-move event caused by its own rename, so that
 move does not queue another OCR or indexing pass.
-Vision calls time out after 600 seconds by default and can be configured with
-`models.vision_timeout_seconds`. Failed suggestions remain pending; a locked
-file gets three short retries before it is left pending for the next attempt.
+Ollama calls time out after 600 seconds by default and can be configured with
+`models.vision_timeout_seconds`. In vision mode the first timeout stops the
+current naming run; the timed-out and remaining suggestions stay pending. A
+locked file gets three short retries before it is left pending for the next attempt.
 
 ## Phase 6: local Streamlit UI
 
@@ -168,8 +172,8 @@ or edits it before choosing to rename that image.
 
 The **Rename all screenshots** UI action lists the candidate count and up to
 five source filenames, then asks for one confirmation. After confirmation, the
-local vision model's suggested names are applied automatically to all indexed
-images under the configured watch folder; there is no per-file review or undo.
+configured naming method is applied automatically to all indexed images under
+the configured watch folder; there is no per-file review or undo.
 The `rename-all` CLI command runs immediately without confirmation. Both flows
 rename files in place, preserve extensions, avoid overwriting existing files,
 and update the indexed paths. Users should back up the folder before a bulk
